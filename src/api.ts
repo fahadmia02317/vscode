@@ -1,14 +1,20 @@
 import * as vscode from 'vscode';
 import { AuthManager } from './auth';
-import { PlanInfo, ChatRequest, ModelOption, DEFAULT_PLAN, fallbackModelsForPlan } from './types';
+import { PlanInfo, ChatRequest, ModelOption, DeviceAuthInfo, DEFAULT_PLAN, fallbackModelsForPlan } from './types';
 
 /**
  * APIClient talks to the Meldrix backend (https://meldrix.com by default).
  *
- * The real Meldrix backend (Next.js) exposes routes that use
- * `getAuthenticatedDbUser(request)` and query PostgreSQL via
- * `getSubscriptionByEmail(email)`. The subscription route returns:
+ * Authentication uses the Device Authorization Flow:
+ *   1. POST {deviceEndpoint}            -> { deviceCode, userCode, verificationUri, expiresIn, interval }
+ *   2. User opens `verificationUri` (meldrix.com/authtoken), signs in with
+ *      Gmail and enters the 6-digit userCode.
+ *   3. POST {deviceTokenEndpoint} polls -> on success returns { token }.
  *
+ * After login every request is authenticated with `Authorization: Bearer <token>`.
+ *
+ * The plan route (Next.js) uses `getAuthenticatedDbUser(request)` and queries
+ * PostgreSQL via `getSubscriptionByEmail(email)`, returning:
  *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
  *   { subscription: null }   ->  user has no subscription (free plan)
  *
@@ -27,11 +33,12 @@ export class APIClient {
     return base.replace(/\/+$/, '');
   }
 
-  /** Builds the full URL for login / plan / chat endpoints. */
-  endpoint(kind: 'login' | 'plan' | 'chat'): string {
+  /** Builds the full URL for the various endpoints. */
+  endpoint(kind: 'device' | 'deviceToken' | 'plan' | 'chat'): string {
     const path =
       {
-        login: this.config<string>('loginEndpoint', '/api/auth/login'),
+        device: this.config<string>('deviceEndpoint', '/api/auth/device'),
+        deviceToken: this.config<string>('deviceTokenEndpoint', '/api/auth/device/token'),
         plan: this.config<string>('planEndpoint', '/api/subscription'),
         chat: this.config<string>('chatEndpoint', '/api/chat'),
       }[kind] || '';
@@ -41,6 +48,11 @@ export class APIClient {
       return `${this.baseUrl()}/${trimmed}`;
     }
     return `${this.baseUrl()}${trimmed}`;
+  }
+
+  /** URL the user opens in the browser to sign in and enter the code. */
+  verificationUri(): string {
+    return this.config<string>('verificationUri', 'https://meldrix.com/authtoken');
   }
 
   private async headers(extra: Record<string, string> = {}): Promise<Record<string, string>> {
@@ -55,28 +67,79 @@ export class APIClient {
     return h;
   }
 
-  /** Logs the user in with email/password and returns an auth token. */
-  async login(email: string, password: string): Promise<string> {
-    const res = await fetch(this.endpoint('login'), {
+  /**
+   * STEP 1 — Device Authorization Flow: request a device/user code pair.
+   *
+   * Backend contract:
+   *   POST {deviceEndpoint}
+   *   -> { deviceCode, userCode, verificationUri?, expiresIn?, interval? }
+   *
+   * `verificationUri` falls back to the configured `meldrix.verificationUri`.
+   */
+  async startDeviceAuth(): Promise<DeviceAuthInfo> {
+    const res = await fetch(this.endpoint('device'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({}),
     });
 
     const data: any = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.error || data?.message || `Login failed (${res.status})`);
+      throw new Error(data?.error || data?.message || `Device auth failed (${res.status})`);
     }
-    const token =
-      data?.token ||
-      data?.accessToken ||
-      data?.access_token ||
-      data?.jwt ||
-      data?.session?.token;
-    if (!token) {
-      throw new Error('Login succeeded but no token was returned by the backend.');
+
+    const deviceCode = data?.deviceCode || data?.device_code;
+    const userCode = data?.userCode || data?.user_code;
+    const verificationUri = data?.verificationUri || data?.verification_uri || this.verificationUri();
+
+    if (!deviceCode || !userCode) {
+      throw new Error('Backend did not return device authorization codes.');
     }
-    return String(token);
+
+    return {
+      deviceCode: String(deviceCode),
+      userCode: String(userCode),
+      verificationUri: String(verificationUri),
+      expiresIn: Number(data?.expiresIn || data?.expires_in || 600),
+      interval: Math.max(2, Number(data?.interval || 5)),
+    };
+  }
+
+  /**
+   * STEP 2 — Poll for the auth token.
+   *
+   * Backend contract:
+   *   POST {deviceTokenEndpoint}  { deviceCode }
+   *   -> while pending:  { error: "authorization_pending" | "slow_down" }
+   *   -> on success:     { token } (or accessToken / access_token / jwt)
+   *   -> on expiry/deny: { error: "expired_token" | "access_denied" }
+   *
+   * Throws an Error whose `.code` carries the backend error so the caller can
+   * decide whether to keep polling.
+   */
+  async pollForToken(deviceCode: string): Promise<string> {
+    const res = await fetch(this.endpoint('deviceToken'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceCode }),
+    });
+
+    const data: any = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      const token = data?.token || data?.accessToken || data?.access_token || data?.jwt;
+      if (token) {
+        return String(token);
+      }
+    }
+
+    const codeRaw =
+      data?.error ||
+      data?.code ||
+      (res.status === 400 ? 'authorization_pending' : `device auth failed (${res.status})`);
+    const err = new Error(data?.error_description || data?.message || String(codeRaw)) as Error & { code: string };
+    err.code = String(codeRaw);
+    throw err;
   }
 
   /**

@@ -1,0 +1,150 @@
+{
+  "name": "meldrix-ai",
+  "displayName": "Meldrix AI",
+  "description": "All-in-one AI assistant for VS Code — Claude, Gemini & Grok with GitHub editing, image/video generation, TTS and agentic tools.",
+  "version": "0.1.0",
+  "publisher": "meldrix",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "meldrix",
+    "assistant",
+    "claude",
+    "gemini",
+    "grok",
+    "agent",
+    "copilot",
+    "code"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "meldrix.open",
+        "title": "Meldrix: Open Assistant",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "meldrix.login",
+        "title": "Meldrix: Login / Connect Account",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "meldrix.logout",
+        "title": "Meldrix: Logout",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "meldrix.showPlan",
+        "title": "Meldrix: Show My Plan",
+        "icon": "$(credit-card)"
+      },
+      {
+        "command": "meldrix.refreshPlan",
+        "title": "Meldrix: Refresh Plan",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "meldrix.explainCode",
+        "title": "Meldrix: Explain Selected Code",
+        "icon": "$(symbol-namespace)"
+      },
+      {
+        "command": "meldrix.openSettings",
+        "title": "Meldrix: Open Settings",
+        "icon": "$(gear)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "meldrix",
+          "title": "Meldrix AI",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "meldrix": [
+        {
+          "type": "webview",
+          "id": "meldrix.view",
+          "name": "Meldrix Assistant"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "meldrix.explainCode",
+          "group": "meldrix@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "meldrix.refreshPlan",
+          "when": "view == meldrix.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "meldrix.login",
+          "when": "view == meldrix.view",
+          "group": "navigation@2"
+        },
+        {
+          "command": "meldrix.showPlan",
+          "when": "view == meldrix.view",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Meldrix AI",
+      "properties": {
+        "meldrix.apiBaseUrl": {
+          "type": "string",
+          "default": "https://meldrix.com",
+          "markdownDescription": "Meldrix backend API base URL (without trailing slash)."
+        },
+        "meldrix.authToken": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional static auth token. Prefer the **Meldrix: Login** command which stores the token securely."
+        },
+        "meldrix.model": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Which model to route chat through (auto = backend decides)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.82.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^2.24.0"
+  }
+}

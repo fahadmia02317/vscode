@@ -8,18 +8,22 @@ import { MeldrixUI } from './ui';
 /**
  * Meldrix AI — VS Code extension entry point.
  *
- * Flow:
- *   1. User logs in with email/password. The backend returns an auth token,
+ * Authentication uses the Device Authorization Flow:
+ *   1. User clicks "Login". We call POST /api/auth/device and receive a short
+ *      userCode (e.g. 6 digits) + deviceCode.
+ *   2. We open the browser at meldrix.com/authtoken and show the code in the
+ *      webview. The user signs in with their Gmail and enters the code.
+ *   3. We poll POST /api/auth/device/token until the backend returns a token,
  *      which is stored securely in VS Code SecretStorage.
- *   2. On activation (and after every login) we fetch the subscription
- *      from the meldrix.com backend DB using the auth token:
+ *   4. On activation (and after every login) we fetch the subscription from
+ *      the meldrix.com backend DB using the auth token:
  *        GET {planEndpoint}  (Authorization: Bearer <token>)
  *      Backend returns:
  *        { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
  *      (or { subscription: null } when there is no subscription.)
- *   3. The plan decides which models are shown in the UI dropdown and which
+ *   5. The plan decides which models are shown in the UI dropdown and which
  *      tools are exposed to the AI.
- *   4. Chat is streamed from the backend using the selected model; the AI can
+ *   6. Chat is streamed from the backend using the selected model; the AI can
  *      invoke tools which we execute locally against the workspace.
  */
 export function activate(context: vscode.ExtensionContext) {
@@ -200,40 +204,77 @@ export function activate(context: vscode.ExtensionContext) {
     return { id: toolCall.id || String(Math.random()), name: toolCall.name, arguments: args };
   }
 
-  // ---- Login command ---------------------------------------------------
+  // ---- Login command (Device Authorization Flow) -----------------------
   async function commandLogin(send?: (p: any) => void) {
-    const email = await vscode.window.showInputBox({
-      prompt: 'Meldrix account email',
-      placeHolder: 'you@example.com',
-      ignoreFocusOut: true,
-    });
-    if (!email) return;
-
-    const password = await vscode.window.showInputBox({
-      prompt: 'Password',
-      password: true,
-      ignoreFocusOut: true,
-    });
-    if (password === undefined) return;
-
     vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Signing in to Meldrix...' },
+      { location: vscode.ProgressLocation.Notification, title: 'Starting device sign-in...' },
       async () => {
+        let device: Awaited<ReturnType<APIClient['startDeviceAuth']>>;
         try {
-          const token = await api.login(email, password);
-          await auth.saveToken(token);
-          const plan = await api.getPlan();
-          setPlan(plan);
-          void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
-          vscode.window.showInformationMessage(
-            `Meldrix: connected as ${email} (${plan.planName} plan)`
-          );
-          warnIfInactive(plan);
-          send?.({ type: 'plan', plan });
+          device = await api.startDeviceAuth();
         } catch (e: any) {
           vscode.window.showErrorMessage(`Meldrix login failed: ${e?.message}`);
           send?.({ type: 'error', text: `Login failed: ${e?.message}` });
+          return;
         }
+
+        // 1) Show the code + verification URL in the webview.
+        send?.({ type: 'deviceCode', userCode: device.userCode, verificationUri: device.verificationUri });
+
+        // 2) Open the browser to the verification URL.
+        void vscode.env.openExternal(vscode.Uri.parse(device.verificationUri));
+
+        // 3) Also surface the code prominently as a modal so the user can copy it.
+        const copyAction = 'Copy Code';
+        const openAgain = 'Open Browser Again';
+        const choice = await vscode.window.showInformationMessage(
+          `Meldrix sign-in: enter this code on ${device.verificationUri}`,
+          { modal: true },
+          copyAction,
+          openAgain
+        );
+        if (choice === copyAction) {
+          await vscode.env.clipboard.writeText(device.userCode);
+          vscode.window.showInformationMessage('Code copied to clipboard.');
+        } else if (choice === openAgain) {
+          void vscode.env.openExternal(vscode.Uri.parse(device.verificationUri));
+        }
+
+        // 4) Poll for the token.
+        const deadline = Date.now() + (device.expiresIn || 600) * 1000;
+        const intervalMs = (device.interval || 5) * 1000;
+        let token: string | undefined;
+
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, intervalMs));
+          try {
+            token = await api.pollForToken(device.deviceCode);
+            break;
+          } catch (e: any) {
+            const code = e?.code;
+            if (code === 'expired_token' || code === 'access_denied') {
+              vscode.window.showErrorMessage(`Meldrix sign-in ${code === 'expired_token' ? 'expired' : 'denied'}.`);
+              send?.({ type: 'error', text: `Sign-in ${code === 'expired_token' ? 'expired' : 'denied'}. Please try again.` });
+              return;
+            }
+            // authorization_pending / slow_down -> keep polling
+          }
+        }
+
+        if (!token) {
+          vscode.window.showErrorMessage('Meldrix sign-in timed out. Please try again.');
+          send?.({ type: 'error', text: 'Sign-in timed out. Please try again.' });
+          return;
+        }
+
+        // 5) Save token, fetch plan, and update UI.
+        await auth.saveToken(token);
+        const plan = await api.getPlan();
+        setPlan(plan);
+        void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
+        vscode.window.showInformationMessage(`Meldrix: connected (${plan.planName} plan)`);
+        warnIfInactive(plan);
+        send?.({ type: 'plan', plan });
       }
     );
   }

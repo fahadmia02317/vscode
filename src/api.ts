@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AuthManager } from './auth';
-import { PlanInfo, ChatRequest, DEFAULT_PLAN } from './types';
+import { PlanInfo, ChatRequest, ModelOption, DEFAULT_PLAN, fallbackModelsForPlan } from './types';
 
 /**
  * APIClient talks to the Meldrix backend (https://meldrix.com by default).
@@ -79,14 +79,16 @@ export class APIClient {
     const features = data?.features || {};
     return {
       plan,
-      planName: data?.planName || data?.name || plan,
+      planName: data?.planName || data?.name || DEFAULT_PLAN.planName,
+      models: this.normalizeModels(data, plan),
+      activeModel: data?.activeModel || data?.defaultModel || data?.model,
       features: {
         chat: features.chat ?? true,
         tools: features.tools ?? (plan === 'pro' || plan === 'ultimate'),
-        github: features.github ?? (plan === 'ultimate'),
-        imageGeneration: features.imageGeneration ?? (plan === 'ultimate'),
-        videoGeneration: features.videoGeneration ?? (plan === 'ultimate'),
-        tts: features.tts ?? (plan !== 'free'),
+        github: features.github ?? plan === 'ultimate',
+        imageGeneration: features.imageGeneration ?? plan === 'ultimate',
+        videoGeneration: features.videoGeneration ?? plan === 'ultimate',
+        tts: features.tts ?? plan !== 'free',
       },
       limits: {
         messagesPerDay: data?.limits?.messagesPerDay ?? 20,
@@ -95,6 +97,42 @@ export class APIClient {
       renewsAt: data?.renewsAt,
       expiresAt: data?.expiresAt,
     };
+  }
+
+  /**
+   * Normalizes the models array from the backend into ModelOption[].
+   * Supports multiple backend shapes:
+   *   models: ["claude", "gemini"]
+   *   models: [{ id, name, provider }]
+   *   modelList / availableModels / models nested in an object
+   */
+  private normalizeModels(data: any, plan: string): ModelOption[] {
+    const raw =
+      data?.models || data?.modelList || data?.availableModels || data?.plans?.models;
+
+    if (Array.isArray(raw) && raw.length > 0) {
+      const mapped = raw
+        .map((m: any) => {
+          if (typeof m === 'string') {
+            return { id: m, name: m, provider: '' } as ModelOption;
+          }
+          if (typeof m === 'object' && m !== null) {
+            const id = m.id || m.key || m.slug || m.value || '';
+            const name = m.name || m.label || m.title || id;
+            const provider = m.provider || m.type || m.vendor || '';
+            return { id, name, provider } as ModelOption;
+          }
+          return null;
+        })
+        .filter((m): m is ModelOption => Boolean(m && m.id));
+
+      if (mapped.length > 0) {
+        return mapped;
+      }
+    }
+
+    // If the backend returned a flat list of strings, fall back by plan tier.
+    return fallbackModelsForPlan(plan);
   }
 
   /**
@@ -110,7 +148,10 @@ export class APIClient {
     onToolCall?: (toolCall: any) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    const model = vscode.workspace.getConfiguration('meldrix').get<string>('model', 'auto');
+    const configModel = vscode.workspace
+      .getConfiguration('meldrix')
+      .get<string>('model', 'auto');
+    const model = request.model || configModel || 'auto';
     const res = await fetch(`${this.baseUrl()}/api/chat`, {
       method: 'POST',
       headers: await this.headers(),

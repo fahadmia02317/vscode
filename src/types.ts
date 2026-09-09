@@ -7,6 +7,8 @@
  *   - app/api/subscription    -> { subscription: { status, plan, endDate, renewsAt, ...row.data } }
  *   - app/api/chat            -> POST { messages, id?, modelId, enableSearch?, githubToken?, githubContext?, fileContext? }
  *                              -> streamText().toUIMessageStreamResponse()
+ *   - app/api/vscode/models   -> GET (API key auth) -> { models: [{ id, name, provider }] }
+ *   - app/api/vscode/agent    -> POST (API key auth) -> streaming AI response with tool calls
  */
 
 /**
@@ -14,6 +16,17 @@
  * NOTE: this is a 4-tier system (free / starter / pro / ultimate) — not 3.
  */
 export type PlanTier = 'free' | 'starter' | 'pro' | 'ultimate';
+
+/**
+ * Authentication mode.
+ *
+ * - 'device': CLI session via Device Authorization Flow (accessToken in SecretStorage).
+ * - 'apikey': Meldrix API key entered by the user (stored in SecretStorage).
+ *
+ * The extension auto-detects which mode is active. If an API key is stored,
+ * it takes precedence (API key mode). Otherwise, device auth is used.
+ */
+export type AuthMode = 'device' | 'apikey';
 
 /** A single AI model available inside a user's subscription plan. */
 export interface ModelOption {
@@ -25,6 +38,20 @@ export interface ModelOption {
   provider?: string;
   /** Minimum tier required for this model (from MODEL_TIER_REQUIREMENTS). */
   minTier?: PlanTier;
+}
+
+/**
+ * A model returned by GET /api/vscode/models (API key mode).
+ *
+ * Unlike ModelOption, this does NOT carry tier information — the Meldrix
+ * backend is the source of truth for model entitlement. If a model appears
+ * in the list, the user can select it. If the backend returns 403 for a
+ * model request, the error is displayed.
+ */
+export interface MeldrixModel {
+  id: string;
+  name: string;
+  provider?: string;
 }
 
 /** Subscription plan fetched from the backend DB via CLI auth token. */
@@ -134,6 +161,37 @@ export interface ChatRequest {
   tools?: { name: string; description: string; parameters: Record<string, any> }[];
   /** Results of previously executed local tools. */
   toolResults?: { id: string; name: string; result: string }[];
+}
+
+/**
+ * Request body for POST /api/vscode/agent (API key mode).
+ *
+ * The Meldrix backend provides the AI model/inference.
+ * VS Code executes all tools locally.
+ *
+ * Token usage is reported by Meldrix (not estimated by VS Code).
+ */
+export interface MeldrixAgentRequest {
+  /** Selected model id (from GET /api/vscode/models). */
+  model: string;
+  /** Conversation messages. */
+  messages: ChatMessage[];
+  /** Local tool definitions sent so the model knows what tools are available. */
+  tools?: { name: string; description: string; parameters: Record<string, any> }[];
+  /** Results of previously executed local tools (from the previous turn). */
+  toolResults?: { id: string; name: string; result: string }[];
+}
+
+/**
+ * Token usage reported by Meldrix (authoritative).
+ *
+ * VS Code must NOT calculate or estimate official token usage.
+ * The Meldrix Dashboard remains the source of truth.
+ */
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
 }
 
 /**

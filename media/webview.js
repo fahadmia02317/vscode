@@ -187,7 +187,7 @@
         </div>
       `;
       statusEl.querySelector('#connectMeldrixBtn').onclick = () => {
-        vscode.postMessage({ type: 'connectMeldrix' });
+        showApiKeyModal();
       };
     }
     
@@ -199,6 +199,55 @@
     
     messages.appendChild(statusEl);
     scrollBottom();
+  }
+
+  // ---- API Key Modal --------------------------------------------------
+  function showApiKeyModal() {
+    // Remove existing modal if any
+    const existingModal = document.querySelector('.api-key-modal');
+    if (existingModal && existingModal.parentNode) {
+      existingModal.parentNode.removeChild(existingModal);
+    }
+
+    const modal = document.createElement('div');
+    modal.className = 'api-key-modal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <h3>Connect to Meldrix</h3>
+        <p>Enter your Meldrix API key to use the Meldrix backend directly.</p>
+        <input type="password" id="apiKeyInput" placeholder="mk_live_xxxxxxxxxxxxxxxxx" />
+        <div class="modal-buttons">
+          <button id="modalConnectBtn">Connect</button>
+          <button id="modalCancelBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    modal.querySelector('#modalConnectBtn').onclick = () => {
+      const apiKey = modal.querySelector('#apiKeyInput').value.trim();
+      if (apiKey) {
+        vscode.postMessage({ type: 'connectMeldrix', apiKey });
+        modal.parentNode.removeChild(modal);
+      }
+    };
+
+    modal.querySelector('#modalCancelBtn').onclick = () => {
+      modal.parentNode.removeChild(modal);
+    };
+
+    // Close modal when clicking outside
+    modal.onclick = (e) => {
+      if (e.target === modal) {
+        modal.parentNode.removeChild(modal);
+      }
+    };
+
+    document.body.appendChild(modal);
+    
+    // Focus the input
+    setTimeout(() => {
+      modal.querySelector('#apiKeyInput').focus();
+    }, 100);
   }
 
   function sendMessage() {

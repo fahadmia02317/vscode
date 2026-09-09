@@ -30,7 +30,7 @@ models & features based on that plan.
 
 ```
 1. Login (email/password)  →  POST /api/auth/login  →  token saved in SecretStorage
-2. Plan fetch               →  GET  /api/plan (Bearer) →  plan + models from DB
+2. Plan fetch               →  GET  /api/plan (Bearer) →  { subscription: { status, plan, ... } } from PostgreSQL DB
 3. UI renders plan badge + model dropdown (only that plan's models)
 4. Chat                     →  POST /api/chat { ..., model } → SSE streamed reply
 ```
@@ -66,32 +66,37 @@ The extension expects your Meldrix backend to expose these endpoints
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/api/auth/login` | none | Body `{ email, password }` → returns `{ token }` |
-| GET  | `/api/plan` | Bearer | Returns the user's plan **and models**, read from your DB |
+| GET  | `/api/plan` | Bearer | Returns the user's subscription **and models**, read from your PostgreSQL DB |
 | POST | `/api/chat` | Bearer | Body: `{ messages, tools, model }` → streams SSE |
 
-### `GET /api/plan` response shape
+### `GET /api/plan` response shape (actual Meldrix backend)
+
+Your existing Next.js route returns the subscription wrapped in a
+`subscription` object — the extension parses exactly this shape:
 
 ```json
 {
-  "plan": "pro",
-  "planName": "Pro",
-  "models": [
-    { "id": "claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "provider": "claude" },
-    { "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "provider": "gemini" }
-  ],
-  "activeModel": "claude-3.7-sonnet",
-  "features": {
-    "chat": true,
-    "tools": true,
-    "github": false,
-    "imageGeneration": false,
-    "videoGeneration": false,
-    "tts": true
-  },
-  "limits": { "messagesPerDay": 500, "usedMessages": 12 },
-  "renewsAt": "2026-10-01T00:00:00Z"
+  "subscription": {
+    "status": "active",
+    "plan": "pro",
+    "endDate": "2026-10-01T00:00:00Z",
+    "renewsAt": "2026-10-01T00:00:00Z",
+    "models": [
+      { "id": "claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "provider": "claude" },
+      { "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "provider": "gemini" }
+    ],
+    "activeModel": "claude-3.7-sonnet"
+  }
 }
 ```
+
+> - `subscription: null` → treated as **free plan** (Claude only).
+> - `status` is shown in the UI; if it is not `active`/`trialing` the user
+>   gets a warning.
+> - `endDate` / `renewsAt` come from `row.ends_at` / `row.renews_at` in your
+>   route — the extension displays them in the plan dialog.
+> - `models` can live anywhere inside the subscription object (e.g. inside
+>   `row.data` which you spread with `...(row.data || {})`).
 
 > **Models field flexibility** — the client accepts several shapes:
 > - `models: [ { id, name, provider } ]`  *(recommended)*

@@ -6,8 +6,11 @@
   const input = document.getElementById('input');
   const send = document.getElementById('send');
   const planBadge = document.getElementById('planBadge');
+  const modelSelect = document.getElementById('modelSelect');
 
   let streamingEl = null;
+  let currentModels = [];
+  let activeModel = null;
 
   function planLabel(p) {
     if (!p || !p.plan) return '–';
@@ -51,9 +54,42 @@
     scrollBottom();
   }
 
+  // ---- Model dropdown -------------------------------------------------
+  function renderModels(plan) {
+    const models = (plan && plan.models) || [];
+    currentModels = models;
+    const active = (plan && plan.activeModel) || models[0]?.id;
+
+    modelSelect.innerHTML = '';
+
+    if (!models || models.length === 0) {
+      models = [];
+      modelSelect.style.display = 'none';
+      activeModel = null;
+      return;
+    }
+
+    modelSelect.style.display = 'inline-block';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name || m.id;
+      modelSelect.appendChild(opt);
+    });
+
+    if (active) {
+      modelSelect.value = active;
+      activeModel = active;
+    } else if (models.length > 0) {
+      activeModel = models[0].id;
+      modelSelect.value = activeModel;
+    }
+  }
+
   function showLogin() {
     planBadge.textContent = 'not logged in';
     planBadge.className = 'plan-badge';
+    modelSelect.style.display = 'none';
     const el = document.createElement('div');
     el.className = 'msg system login-card';
     el.innerHTML =
@@ -70,7 +106,7 @@
     if (!text) return;
     input.value = '';
     addMessage('user', text);
-    vscode.postMessage({ type: 'chat', text });
+    vscode.postMessage({ type: 'chat', text, model: activeModel });
   }
 
   send.addEventListener('click', sendMessage);
@@ -81,12 +117,17 @@
     }
   });
 
+  modelSelect.addEventListener('change', () => {
+    activeModel = modelSelect.value;
+  });
+
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
       case 'plan':
         planBadge.textContent = planLabel(msg.plan);
         planBadge.className = 'plan-badge ' + planClass(msg.plan);
+        renderModels(msg.plan);
         break;
       case 'status':
         streamingEl = null;

@@ -6,21 +6,37 @@ music.
 
 This extension is the **VS Code client** for the Meldrix backend
 (https://meldrix.com). It connects to your Meldrix account, fetches your
-subscription plan from the backend database, and unlocks features based on
-that plan.
+subscription plan + unlocked models from the backend database, and unlocks
+models & features based on that plan.
 
 ---
 
 ## Features
 
-- 🤖 **Multi-model chat** — route to Claude, Gemini or Grok (or let the backend decide).
+- 🤖 **Plan-aware model selector** — after login, the models unlocked by your
+  subscription are fetched from the backend DB and shown in a dropdown. The
+  selected model is routed to the backend on every chat.
 - ⚡ **Streaming responses** — token-by-token, Cline-style.
 - 🧰 **Agentic tools** — the AI can read/write/edit files, list directories,
   run terminal commands, and search the workspace.
 - 🔐 **Secure auth** — token stored in VS Code SecretStorage (OS keychain).
 - 💳 **Plan-aware** — your subscription plan (free / pro / ultimate) is fetched
-  from the backend DB and gates which tools are available.
+  from the backend DB and gates which models + tools are available.
 - 🧭 **Two surfaces** — a sidebar view (activity bar) and a full editor panel.
+
+---
+
+## Auth → Plan → Models flow
+
+```
+1. Login (email/password)  →  POST /api/auth/login  →  token saved in SecretStorage
+2. Plan fetch               →  GET  /api/plan (Bearer) →  plan + models from DB
+3. UI renders plan badge + model dropdown (only that plan's models)
+4. Chat                     →  POST /api/chat { ..., model } → SSE streamed reply
+```
+
+The extension **validates the selected model against the plan** — if a model
+isn't in the returned `models[]`, the request is blocked client-side.
 
 ---
 
@@ -50,7 +66,7 @@ The extension expects your Meldrix backend to expose these endpoints
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | POST | `/api/auth/login` | none | Body `{ email, password }` → returns `{ token }` |
-| GET  | `/api/plan` | Bearer | Returns the user's plan, read from your DB |
+| GET  | `/api/plan` | Bearer | Returns the user's plan **and models**, read from your DB |
 | POST | `/api/chat` | Bearer | Body: `{ messages, tools, model }` → streams SSE |
 
 ### `GET /api/plan` response shape
@@ -59,6 +75,11 @@ The extension expects your Meldrix backend to expose these endpoints
 {
   "plan": "pro",
   "planName": "Pro",
+  "models": [
+    { "id": "claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "provider": "claude" },
+    { "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "provider": "gemini" }
+  ],
+  "activeModel": "claude-3.7-sonnet",
   "features": {
     "chat": true,
     "tools": true,
@@ -69,6 +90,24 @@ The extension expects your Meldrix backend to expose these endpoints
   },
   "limits": { "messagesPerDay": 500, "usedMessages": 12 },
   "renewsAt": "2026-10-01T00:00:00Z"
+}
+```
+
+> **Models field flexibility** — the client accepts several shapes:
+> - `models: [ { id, name, provider } ]`  *(recommended)*
+> - `models: ["claude", "gemini"]`  *(strings — name == id)*
+> - `modelList` / `availableModels`  *(alias keys)*
+>
+> If `models` is missing or empty, the client falls back to a **tier-based
+> default**: Free → Claude, Pro → Claude + Gemini, Ultimate → Claude + Gemini + Grok.
+
+### `POST /api/chat` request shape
+
+```json
+{
+  "messages": [ { "role": "user", "content": "hello" } ],
+  "model": "claude-3.7-sonnet",
+  "tools": [ { "name": "read_file", "description": "...", "parameters": {} } ]
 }
 ```
 
@@ -111,7 +150,7 @@ data: {"tool_call":{"id":"1","name":"read_file","arguments":{"path":"src/app.ts"
 |---------|---------|-------------|
 | `meldrix.apiBaseUrl` | `https://meldrix.com` | Backend API base URL |
 | `meldrix.authToken` | `""` | Optional static token (auto-saved after login) |
-| `meldrix.model` | `auto` | `auto` / `claude` / `gemini` / `grok` |
+| `meldrix.model` | `auto` | Fallback model when none selected in the dropdown |
 
 ---
 
@@ -123,15 +162,15 @@ data: {"tool_call":{"id":"1","name":"read_file","arguments":{"path":"src/app.ts"
 ├── tsconfig.json
 ├── media/
 │   ├── icon.svg          # activity bar icon
-│   ├── webview.js        # chat UI client
+│   ├── webview.js        # chat UI client (model dropdown, streaming)
 │   └── webview.css
 └── src/
-    ├── extension.ts      # activate, commands, views, chat loop
+    ├── extension.ts      # activate, commands, views, chat loop + model routing
     ├── auth.ts           # secure token storage
-    ├── api.ts            # login / plan / streaming chat
+    ├── api.ts            # login / plan (+models) / streaming chat
     ├── tools.ts          # agentic tool registry
-    ├── ui.ts             # shared webview HTML
-    └── types.ts
+    ├── ui.ts             # shared webview HTML (model selector)
+    └── types.ts          # PlanInfo, ModelOption, fallback models
 ```
 
 ---

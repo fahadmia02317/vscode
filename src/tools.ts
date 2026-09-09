@@ -198,8 +198,8 @@ export class ToolRegistry {
   }
 
   private async search(pattern: string, fileTypes?: string): Promise<string> {
-    const include = fileTypes
-      ? fileTypes.split(',').map((f) => `**/*.${f.trim()}`)
+    const include: string = fileTypes
+      ? `{${fileTypes.split(',').map((f) => `**/*.${f.trim()}`).join(',')}}`
       : '**/*';
     const files = await vscode.workspace.findFiles(include, '**/node_modules/**', 200);
     const results: string[] = [];

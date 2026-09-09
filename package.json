@@ -115,6 +115,21 @@
           "default": "https://meldrix.com",
           "markdownDescription": "Meldrix backend API base URL (without trailing slash)."
         },
+        "meldrix.loginEndpoint": {
+          "type": "string",
+          "default": "/api/auth/login",
+          "markdownDescription": "Path for the login endpoint (returns an auth token on success)."
+        },
+        "meldrix.planEndpoint": {
+          "type": "string",
+          "default": "/api/subscription",
+          "markdownDescription": "Path for the subscription/plan endpoint. This is the route that calls `getAuthenticatedDbUser` + `getSubscriptionByEmail` and returns `{ subscription: { status, plan, endDate, renewsAt, ...row.data } }`."
+        },
+        "meldrix.chatEndpoint": {
+          "type": "string",
+          "default": "/api/chat",
+          "markdownDescription": "Path for the streaming chat endpoint."
+        },
         "meldrix.authToken": {
           "type": "string",
           "default": "",

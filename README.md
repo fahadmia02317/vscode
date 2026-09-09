@@ -1,196 +1,213 @@
-# Meldrix AI for VS Code ✦
+# Meldrix AI — VS Code Extension
 
-All-in-one AI assistant for Visual Studio Code — Claude, Gemini & Grok in one
-workspace, with agentic tools, GitHub editing, image/video generation, TTS and
-music.
+> All-in-one AI assistant for VS Code — Claude, Gemini & Grok with agentic tools, plan-gated models and device sign-in. Powered by [meldrix.com](https://meldrix.com).
 
-This extension is the **VS Code client** for the Meldrix backend
-(https://meldrix.com). It connects to your Meldrix account, fetches your
-subscription plan + unlocked models from the backend database, and unlocks
-models & features based on that plan.
+This extension is the VS Code client for the Meldrix backend. It mirrors the production app exactly:
 
----
-
-## Features
-
-- 🤖 **Plan-aware model selector** — after login, the models unlocked by your
-  subscription are fetched from the backend DB and shown in a dropdown. The
-  selected model is routed to the backend on every chat.
-- ⚡ **Streaming responses** — token-by-token, Cline-style.
-- 🧰 **Agentic tools** — the AI can read/write/edit files, list directories,
-  run terminal commands, and search the workspace.
-- 🔐 **Secure auth** — token stored in VS Code SecretStorage (OS keychain).
-- 💳 **Plan-aware** — your subscription plan (free / pro / ultimate) is fetched
-  from the backend DB and gates which models + tools are available.
-- 🧭 **Two surfaces** — a sidebar view (activity bar) and a full editor panel.
+- **Auth** → Device Authorization Flow backed by `lib/auth/cli.ts` (`createDeviceAuthorization` → `approveDeviceAuthorization` → `issueCliSession`). The `accessToken` is validated server-side by `getAuthenticatedDbUser(request)` via `getCliSession(token)`.
+- **Plans** → `app/api/subscription` (`getSubscriptionByEmail` from PostgreSQL). Four tiers from `getUserPlanTier()`: **free · starter · pro · ultimate**.
+- **Models** → the dropdown only shows models the user's tier unlocks (mirrors `MODEL_TIER_REQUIREMENTS` + `isModelAllowedForTier`).
+- **Chat** → `app/api/chat` with body `{ messages, id?, modelId, enableSearch?, githubToken?, githubContext?, fileContext? }`, streamed via `streamText().toUIMessageStreamResponse()` (AI SDK UI message stream).
 
 ---
 
-## Auth → Plan → Models flow
+## ✨ Features
 
-```
-1. Login (email/password)  →  POST /api/auth/login  →  token saved in SecretStorage
-2. Plan fetch               →  GET  /api/plan (Bearer) →  { subscription: { status, plan, ... } } from PostgreSQL DB
-3. UI renders plan badge + model dropdown (only that plan's models)
-4. Chat                     →  POST /api/chat { ..., model } → SSE streamed reply
-```
-
-The extension **validates the selected model against the plan** — if a model
-isn't in the returned `models[]`, the request is blocked client-side.
+- 🔐 **Device sign-in** — click Login, a short code appears, the browser opens `meldrix.com/authtoken`, the user signs in with Gmail and enters the code. The extension polls until the backend issues a CLI session.
+- 🔄 **Silent token refresh** — the `refreshToken` is stored in SecretStorage; expired access tokens are refreshed automatically before each request.
+- 💳 **Plan-aware UI** — plan badge (free/starter/pro/ultimate) + model dropdown populated from the subscription.
+- 🧰 **Agentic tools** — `read_file`, `list_files`, `search` (all tiers), `write_file`, `edit_file` (starter+), `run_command` (pro+). Gated locally *and* by the backend.
+- 💬 **Streaming chat** — parses AI SDK `text-delta` / `tool-call` stream parts token-by-token.
+- 🛡️ **402 / 401 / 429 handling** — plan-denied models, expired sessions and rate limits surface clear messages.
 
 ---
 
-## Quick start (development)
+## 🚀 Run locally
 
 ```bash
+git clone https://github.com/fahadmia02317/vscode.git
+cd vscode
 npm install
 npm run compile
 ```
 
-Then press `F5` (run Extension Development Host), or build the VSIX:
+Open the folder in VS Code and press **F5** (Extension Development Host). Click the ✦ Meldrix icon in the activity bar.
+
+## 📦 Package & publish
 
 ```bash
-npm install -g @vscode/vsce
-vsce package          # produces meldrix-ai-x.x.x.vsix
-```
-
-Install locally: VS Code → Extensions → `...` → **Install from VSIX**.
-
----
-
-## Backend contract
-
-The extension expects your Meldrix backend to expose these endpoints
-(configure the base URL via `meldrix.apiBaseUrl`, default `https://meldrix.com`):
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/api/auth/login` | none | Body `{ email, password }` → returns `{ token }` |
-| GET  | `/api/plan` | Bearer | Returns the user's subscription **and models**, read from your PostgreSQL DB |
-| POST | `/api/chat` | Bearer | Body: `{ messages, tools, model }` → streams SSE |
-
-### `GET /api/plan` response shape (actual Meldrix backend)
-
-Your existing Next.js route returns the subscription wrapped in a
-`subscription` object — the extension parses exactly this shape:
-
-```json
-{
-  "subscription": {
-    "status": "active",
-    "plan": "pro",
-    "endDate": "2026-10-01T00:00:00Z",
-    "renewsAt": "2026-10-01T00:00:00Z",
-    "models": [
-      { "id": "claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "provider": "claude" },
-      { "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "provider": "gemini" }
-    ],
-    "activeModel": "claude-3.7-sonnet"
-  }
-}
-```
-
-> - `subscription: null` → treated as **free plan** (Claude only).
-> - `status` is shown in the UI; if it is not `active`/`trialing` the user
->   gets a warning.
-> - `endDate` / `renewsAt` come from `row.ends_at` / `row.renews_at` in your
->   route — the extension displays them in the plan dialog.
-> - `models` can live anywhere inside the subscription object (e.g. inside
->   `row.data` which you spread with `...(row.data || {})`).
-
-> **Models field flexibility** — the client accepts several shapes:
-> - `models: [ { id, name, provider } ]`  *(recommended)*
-> - `models: ["claude", "gemini"]`  *(strings — name == id)*
-> - `modelList` / `availableModels`  *(alias keys)*
->
-> If `models` is missing or empty, the client falls back to a **tier-based
-> default**: Free → Claude, Pro → Claude + Gemini, Ultimate → Claude + Gemini + Grok.
-
-### `POST /api/chat` request shape
-
-```json
-{
-  "messages": [ { "role": "user", "content": "hello" } ],
-  "model": "claude-3.7-sonnet",
-  "tools": [ { "name": "read_file", "description": "...", "parameters": {} } ]
-}
-```
-
-### `POST /api/chat` streaming
-
-Return `text/event-stream` frames:
-
-```
-data: {"content":"Hello"}
-
-data: {"content":" world"}
-
-data: [DONE]
-```
-
-To trigger a tool call, emit:
-
-```
-data: {"tool_call":{"id":"1","name":"read_file","arguments":{"path":"src/app.ts"}}}
-```
-
----
-
-## Plan tiers & tool gating
-
-| Tool | Free | Pro | Ultimate |
-|------|:----:|:---:|:--------:|
-| `read_file` | ✅ | ✅ | ✅ |
-| `list_files` | ✅ | ✅ | ✅ |
-| `search` | ✅ | ✅ | ✅ |
-| `write_file` | ❌ | ✅ | ✅ |
-| `edit_file` | ❌ | ✅ | ✅ |
-| `run_command` | ❌ | ❌ | ✅ |
-
----
-
-## Extension settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `meldrix.apiBaseUrl` | `https://meldrix.com` | Backend API base URL |
-| `meldrix.authToken` | `""` | Optional static token (auto-saved after login) |
-| `meldrix.model` | `auto` | Fallback model when none selected in the dropdown |
-
----
-
-## Project structure
-
-```
-.
-├── package.json          # manifest: commands, views, config
-├── tsconfig.json
-├── media/
-│   ├── icon.svg          # activity bar icon
-│   ├── webview.js        # chat UI client (model dropdown, streaming)
-│   └── webview.css
-└── src/
-    ├── extension.ts      # activate, commands, views, chat loop + model routing
-    ├── auth.ts           # secure token storage
-    ├── api.ts            # login / plan (+models) / streaming chat
-    ├── tools.ts          # agentic tool registry
-    ├── ui.ts             # shared webview HTML (model selector)
-    └── types.ts          # PlanInfo, ModelOption, fallback models
-```
-
----
-
-## Publishing to the Marketplace
-
-```bash
-# 1. create a publisher: https://marketplace.visualstudio.com/manage
-# 2. login and publish
+npm run package     # -> meldrix-ai-0.2.0.vsix
 vsce login meldrix
 vsce publish
 ```
 
 ---
 
-## License
+## ⚙️ Settings
 
-MIT © Meldrix AI
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `meldrix.apiBaseUrl` | `https://meldrix.com` | Backend base URL |
+| `meldrix.deviceEndpoint` | `/api/auth/device` | Step 1 — create device authorization |
+| `meldrix.deviceTokenEndpoint` | `/api/auth/device/token` | Step 2 — poll → issue CLI session |
+| `meldrix.refreshEndpoint` | `/api/auth/device/refresh` | Refresh an expired access token |
+| `meldrix.verificationUri` | `https://meldrix.com/authtoken` | Browser sign-in page |
+| `meldrix.planEndpoint` | `/api/subscription` | Subscription / plan (already exists ✅) |
+| `meldrix.modelsEndpoint` | `/api/models` | Optional tier-filtered model list |
+| `meldrix.chatEndpoint` | `/api/chat` | Streaming chat (already exists ✅) |
+| `meldrix.model` | `""` | Default `modelId` override |
+
+---
+
+## 🔌 Backend contract
+
+### ✅ Already implemented in meldrix.com
+
+| Route | Status |
+|-------|--------|
+| `GET /api/subscription` | ✅ exists — returns `{ subscription: { status, plan, endDate, renewsAt, ...row.data } }` |
+| `POST /api/chat` | ✅ exists — `getAuthenticatedDbUser` + `isModelAllowedForTier` + `toUIMessageStreamResponse()` |
+| `lib/auth/cli.ts` | ✅ exists — `createDeviceAuthorization`, `approveDeviceAuthorization`, `issueCliSession`, `getCliSession`, `refreshCliSession`, `revokeCliSession` |
+
+### 🛠️ Routes to add (thin wrappers around `lib/auth/cli.ts`)
+
+#### 1. `POST /api/auth/device` — start device flow
+
+```ts
+// app/api/auth/device/route.ts
+import { NextResponse } from "next/server";
+import { createDeviceAuthorization } from "@/lib/auth/cli";
+
+export const dynamic = "force-dynamic";
+
+export async function POST() {
+  const auth = await createDeviceAuthorization(); // { deviceCode, userCode, expiresAt, ... }
+  return NextResponse.json({
+    deviceCode: auth.deviceCode,
+    userCode: auth.userCode,
+    verificationUri: "https://meldrix.com/authtoken",
+    expiresIn: 600,
+    interval: 5,
+  });
+}
+```
+
+#### 2. `POST /api/auth/device/token` — poll for the session
+
+```ts
+// app/api/auth/device/token/route.ts
+import { NextResponse } from "next/server";
+import { getDeviceAuthorization, issueCliSession } from "@/lib/auth/cli";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  const { deviceCode } = await request.json();
+  const device = await getDeviceAuthorization(deviceCode);
+
+  if (!device) {
+    return NextResponse.json({ error: "expired_token" }, { status: 400 });
+  }
+  if (!device.approved) {
+    // user has not entered the code on the website yet
+    return NextResponse.json({ error: "authorization_pending" }, { status: 400 });
+  }
+
+  const session = await issueCliSession(deviceCode); // { accessToken, refreshToken, expiresAt }
+  return NextResponse.json(session);
+}
+```
+
+#### 3. `POST /api/auth/device/refresh` — refresh the access token
+
+```ts
+// app/api/auth/device/refresh/route.ts
+import { NextResponse } from "next/server";
+import { refreshCliSession } from "@/lib/auth/cli";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  const { refreshToken } = await request.json();
+  try {
+    const session = await refreshCliSession(refreshToken);
+    return NextResponse.json(session);
+  } catch {
+    return NextResponse.json({ error: "invalid_grant" }, { status: 401 });
+  }
+}
+```
+
+#### 4. `meldrix.com/authtoken` — the verification page
+
+A page where the signed-in user enters the `userCode`. On submit it calls
+`approveDeviceAuthorization(userCode, dbUser)` from `lib/auth/cli.ts`.
+The extension's next poll then receives the session.
+
+#### 5. (Optional) `GET /api/models` — tier-filtered model list
+
+```ts
+// app/api/models/route.ts
+import { NextResponse } from "next/server";
+import { getAuthenticatedDbUser } from "@/lib/auth/server-user";
+import { getCachedUserSubscriptionData } from "@/lib/subscription";
+import { getUserPlanTier, MODEL_LABELS, isModelAllowedForTier } from "@/lib/constants";
+
+export const dynamic = "force-dynamic";
+
+export async function GET(request: Request) {
+  const { dbUser } = await getAuthenticatedDbUser(request);
+  const sub = await getCachedUserSubscriptionData(dbUser.email);
+  const tier = getUserPlanTier(sub.isOwner, sub.isSubscribed, sub.planName);
+
+  const models = Object.entries(MODEL_LABELS)
+    .filter(([id]) => isModelAllowedForTier(id, tier))
+    .map(([id, name]) => ({ id, name }));
+
+  return NextResponse.json({ models });
+}
+```
+
+> If you skip `/api/models`, the extension falls back to the `models` array spread from `row.data` in the subscription response, and finally to a built-in tier-based list.
+
+---
+
+## 🔁 End-to-end flow
+
+```
+Login click
+  → POST /api/auth/device            → { deviceCode, userCode }
+  → browser opens meldrix.com/authtoken (Gmail sign-in + enter code)
+  → poll POST /api/auth/device/token → { accessToken, refreshToken }  (issueCliSession)
+  → SecretStorage save
+  → GET /api/subscription (Bearer)   → { subscription: { status, plan, ...row.data } }
+  → normalizeTier(plan)              → free | starter | pro | ultimate
+  → model dropdown + tool gating
+  → POST /api/chat { messages, modelId } → AI SDK stream → token-by-token UI
+```
+
+---
+
+## 🗂️ Project structure
+
+```
+src/
+├── extension.ts   → activate, commands, sidebar/panel, agentic chat loop
+├── auth.ts        → CLI session in SecretStorage (accessToken + refreshToken + expiry)
+├── api.ts         → device auth, refresh, plan fetch, AI SDK stream parser
+├── tools.ts       → agentic tools, 4-tier gating (TIER_RANK)
+├── ui.ts          → shared webview HTML (CSP + model selector)
+└── types.ts       → PlanTier, CliSession, ChatRequest, normalizeTier, isModelAllowedForTier
+media/
+├── icon.svg       → activity bar icon
+├── webview.js     → chat UI client (streaming, plan badge, device-code card)
+└── webview.css    → dark theme + tier badge colors
+```
+
+## 🔒 Privacy
+
+User data is accessed only to fulfil explicit user instructions and is never stored, sold or shared. Tokens live in the OS keychain via VS Code SecretStorage.
+
+## 📄 License
+
+MIT

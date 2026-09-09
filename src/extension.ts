@@ -12,6 +12,7 @@ import { MeldrixUI } from './ui';
  *   1. User logs in (token saved in SecretStorage).
  *   2. On activation (and every login) we fetch the subscription plan
  *      from the meldrix.com backend DB using the auth token.
+ *      Backend returns: { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
  *   3. The plan decides which models are shown in the UI dropdown and
  *      which tools are exposed to the AI.
  *   4. Chat is streamed from the backend using the selected model;
@@ -58,6 +59,16 @@ export function activate(context: vscode.ExtensionContext) {
         void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', false);
       }
       return undefined;
+    }
+  }
+
+  /** Warns the user when their subscription is not active. */
+  function warnIfInactive(plan: PlanInfo) {
+    const status = (plan.status || 'active').toLowerCase();
+    if (status !== 'active' && status !== 'trialing') {
+      vscode.window.showWarningMessage(
+        `Meldrix: your subscription is "${status}". Some features may be limited.`
+      );
     }
   }
 
@@ -208,6 +219,7 @@ export function activate(context: vscode.ExtensionContext) {
           setPlan(plan);
           void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
           vscode.window.showInformationMessage(`Meldrix: connected as ${email} (${plan.planName} plan)`);
+          warnIfInactive(plan);
           send?.({ type: 'plan', plan });
         } catch (e: any) {
           vscode.window.showErrorMessage(`Meldrix login failed: ${e?.message}`);
@@ -241,19 +253,22 @@ export function activate(context: vscode.ExtensionContext) {
       const modelList = (p.models || []).map((m) => m.name).join(', ');
       const lines = [
         `Plan: ${p.planName} (${p.plan})`,
+        `Status: ${p.status || 'active'}`,
         `Models: ${modelList || 'default'}`,
         `Chat: ${f.chat ? '✅' : '❌'}`,
         `Tools (edit/terminal): ${f.tools ? '✅' : '❌'}`,
         `GitHub: ${f.github ? '✅' : '❌'}`,
         `Image: ${f.imageGeneration ? '✅' : '❌'}  Video: ${f.videoGeneration ? '✅' : '❌'}  TTS: ${f.tts ? '✅' : '❌'}`,
         `Messages/day: ${p.limits.messagesPerDay}${p.limits.usedMessages ? ` (used ${p.limits.usedMessages})` : ''}`,
-      ];
+        p.renewsAt ? `Renews: ${new Date(p.renewsAt).toLocaleDateString()}` : '',
+        p.expiresAt ? `Expires: ${new Date(p.expiresAt).toLocaleDateString()}` : '',
+      ].filter(Boolean);
       vscode.window.showInformationMessage(lines.join('\n'), { modal: true }, 'OK');
     }),
     vscode.commands.registerCommand('meldrix.refreshPlan', async () => {
       const p = await refreshPlan();
       vscode.window.showInformationMessage(
-        p ? `Meldrix plan refreshed: ${p.planName}` : 'Meldrix: not logged in or plan unavailable.'
+        p ? `Meldrix plan refreshed: ${p.planName} (${p.status || 'active'})` : 'Meldrix: not logged in or plan unavailable.'
       );
     }),
     vscode.commands.registerCommand('meldrix.explainCode', () => {

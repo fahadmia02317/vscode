@@ -61,6 +61,7 @@ html, body {
   padding: 3px 6px;
   font-size: 12px;
   outline: none;
+  max-width: 160px;
 }
 
 .plan-badge {
@@ -70,9 +71,12 @@ html, body {
   border: 1px solid var(--border);
   color: var(--muted);
   text-transform: capitalize;
+  white-space: nowrap;
 }
 
+/* 4-tier plan badges: free | starter | pro | ultimate */
 .plan-badge.free { color: #8a8a8a; }
+.plan-badge.starter { color: #81c784; border-color: #81c784; }
 .plan-badge.pro { color: #4fc3f7; border-color: #4fc3f7; }
 .plan-badge.ultimate { color: #ffd54f; border-color: #ffd54f; }
 

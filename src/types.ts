@@ -4,10 +4,24 @@
 
 export type PlanTier = 'free' | 'pro' | 'ultimate';
 
+/** A single AI model available inside a user's subscription plan. */
+export interface ModelOption {
+  /** Unique model id sent to the backend, e.g. "claude-3.7-sonnet". */
+  id: string;
+  /** Human friendly name, e.g. "Claude 3.7 Sonnet". */
+  name: string;
+  /** Provider family, e.g. "claude" | "gemini" | "grok". */
+  provider?: string;
+}
+
 /** Subscription plan fetched from the backend DB via auth token. */
 export interface PlanInfo {
   plan: PlanTier;
   planName: string;
+  /** Models unlocked for this plan (shown in the UI dropdown). */
+  models: ModelOption[];
+  /** Default/active model the user last used (optional). */
+  activeModel?: string;
   features: {
     chat: boolean;
     tools: boolean; // file read/write/edit, terminal, search
@@ -48,9 +62,31 @@ export interface ChatRequest {
   toolResults?: { id: string; name: string; result: string }[];
 }
 
+/**
+ * Fallback models used when the backend plan does not explicitly list models.
+ * Tiers map to the models advertised on meldrix.com:
+ *   Claude 3.7 Sonnet, Gemini 3.6 Flash, Grok AI.
+ */
+export function fallbackModelsForPlan(plan: string): ModelOption[] {
+  const claude: ModelOption = { id: 'claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', provider: 'claude' };
+  const gemini: ModelOption = { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', provider: 'gemini' };
+  const grok: ModelOption = { id: 'grok-ai', name: 'Grok AI', provider: 'grok' };
+
+  switch ((plan || '').toLowerCase()) {
+    case 'ultimate':
+      return [claude, gemini, grok];
+    case 'pro':
+      return [claude, gemini];
+    case 'free':
+    default:
+      return [claude];
+  }
+}
+
 export const DEFAULT_PLAN: PlanInfo = {
   plan: 'free',
   planName: 'Free',
+  models: fallbackModelsForPlan('free'),
   features: {
     chat: true,
     tools: false,

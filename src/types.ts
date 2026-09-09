@@ -18,6 +18,12 @@ export interface ModelOption {
 export interface PlanInfo {
   plan: PlanTier;
   planName: string;
+  /**
+   * Subscription status from the backend DB
+   * (e.g. "active" | "trialing" | "canceled" | "expired" | "past_due").
+   * Missing/unknown status is treated as "active".
+   */
+  status?: string;
   /** Models unlocked for this plan (shown in the UI dropdown). */
   models: ModelOption[];
   /** Default/active model the user last used (optional). */
@@ -86,6 +92,7 @@ export function fallbackModelsForPlan(plan: string): ModelOption[] {
 export const DEFAULT_PLAN: PlanInfo = {
   plan: 'free',
   planName: 'Free',
+  status: 'active',
   models: fallbackModelsForPlan('free'),
   features: {
     chat: true,

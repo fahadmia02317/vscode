@@ -9,14 +9,18 @@ import { MeldrixUI } from './ui';
  * Meldrix AI — VS Code extension entry point.
  *
  * Flow:
- *   1. User logs in (token saved in SecretStorage).
- *   2. On activation (and every login) we fetch the subscription plan
- *      from the meldrix.com backend DB using the auth token.
- *      Backend returns: { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
- *   3. The plan decides which models are shown in the UI dropdown and
- *      which tools are exposed to the AI.
- *   4. Chat is streamed from the backend using the selected model;
- *      the AI can invoke tools which we execute locally.
+ *   1. User logs in with email/password. The backend returns an auth token,
+ *      which is stored securely in VS Code SecretStorage.
+ *   2. On activation (and after every login) we fetch the subscription
+ *      from the meldrix.com backend DB using the auth token:
+ *        GET {planEndpoint}  (Authorization: Bearer <token>)
+ *      Backend returns:
+ *        { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
+ *      (or { subscription: null } when there is no subscription.)
+ *   3. The plan decides which models are shown in the UI dropdown and which
+ *      tools are exposed to the AI.
+ *   4. Chat is streamed from the backend using the selected model; the AI can
+ *      invoke tools which we execute locally against the workspace.
  */
 export function activate(context: vscode.ExtensionContext) {
   const auth = new AuthManager(context);
@@ -38,7 +42,7 @@ export function activate(context: vscode.ExtensionContext) {
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // ---- Shared message handler for chat UI -----------------------------
+  // ---- Message reply helper --------------------------------------------
   const post = (webview: vscode.Webview) => ({
     send: (payload: any) => void webview.postMessage(payload),
   });
@@ -47,14 +51,11 @@ export function activate(context: vscode.ExtensionContext) {
     try {
       const plan = await api.getPlan();
       setPlan(plan);
-      void vscode.commands.executeCommand(
-        'setContext',
-        'meldrix.loggedIn',
-        true
-      );
+      void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
       return plan;
     } catch (e: any) {
       if (e?.message === 'unauthorized' || e?.message?.includes('401')) {
+        // Token is invalid/expired -> force a fresh login.
         currentPlan = undefined;
         void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', false);
       }
@@ -113,9 +114,11 @@ export function activate(context: vscode.ExtensionContext) {
     }
     if (!currentPlan) {
       const p = await refreshPlan();
-      if (p && model) {
-        // After a fresh fetch, (re)send plan so the UI dropdown stays in sync.
+      if (p) {
         send({ type: 'plan', plan: p });
+      } else {
+        send({ type: 'error', text: 'Could not load your subscription. Please login again.' });
+        return;
       }
     }
     if (!currentPlan?.features.chat) {
@@ -139,7 +142,7 @@ export function activate(context: vscode.ExtensionContext) {
       tools: tools.publicDefinitions(),
     };
 
-    // Collect the AI's tool calls (single loop for simplicity).
+    // Collect the AI's tool calls for the agentic loop.
     const pendingToolCalls: ToolCall[] = [];
 
     try {
@@ -155,18 +158,22 @@ export function activate(context: vscode.ExtensionContext) {
         }
       );
 
-      // Execute any tool calls and (optionally) report results back.
+      // Execute any tool calls locally and report the result.
       for (const call of pendingToolCalls) {
         const result = await tools.execute(call.name, call.arguments);
         send({ type: 'status', text: `⚙ ${call.name} → ${result.success ? 'ok' : 'failed'}` });
-        // Could send the result back to the backend for a follow-up turn;
-        // uncomment to close the agentic loop:
-        // await api.chatStream({
-        //   messages: [...request.messages, { role: 'assistant', content: '' }],
-        //   model,
-        //   tools: tools.publicDefinitions(),
-        //   toolResults: [{ id: call.id, name: call.name, result: result.output }],
-        // }, (chunk) => send({ type: 'token', text: chunk }));
+        // NOTE: to close the agentic loop, send `result.output` back to the
+        // backend for a follow-up turn. Uncomment and wire your backend's
+        // tool-result format here:
+        // await api.chatStream(
+        //   {
+        //     messages: [...request.messages, { role: 'assistant', content: '' }],
+        //     model,
+        //     tools: tools.publicDefinitions(),
+        //     toolResults: [{ id: call.id, name: call.name, result: result.output }],
+        //   },
+        //   (chunk) => send({ type: 'token', text: chunk })
+        // );
       }
 
       send({ type: 'done' });
@@ -218,7 +225,9 @@ export function activate(context: vscode.ExtensionContext) {
           const plan = await api.getPlan();
           setPlan(plan);
           void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
-          vscode.window.showInformationMessage(`Meldrix: connected as ${email} (${plan.planName} plan)`);
+          vscode.window.showInformationMessage(
+            `Meldrix: connected as ${email} (${plan.planName} plan)`
+          );
           warnIfInactive(plan);
           send?.({ type: 'plan', plan });
         } catch (e: any) {
@@ -268,7 +277,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('meldrix.refreshPlan', async () => {
       const p = await refreshPlan();
       vscode.window.showInformationMessage(
-        p ? `Meldrix plan refreshed: ${p.planName} (${p.status || 'active'})` : 'Meldrix: not logged in or plan unavailable.'
+        p
+          ? `Meldrix plan refreshed: ${p.planName} (${p.status || 'active'})`
+          : 'Meldrix: not logged in or plan unavailable.'
       );
     }),
     vscode.commands.registerCommand('meldrix.explainCode', () => {
@@ -285,10 +296,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
     }),
     vscode.commands.registerCommand('meldrix.openSettings', () => {
-      vscode.commands.executeCommand(
-        'workbench.action.openSettings',
-        '@ext:meldrix'
-      );
+      vscode.commands.executeCommand('workbench.action.openSettings', '@ext:meldrix');
     })
   );
 

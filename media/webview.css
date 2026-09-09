@@ -1,13 +1,13 @@
 :root {
-  --bg: #1e1e2e;
-  --bg-soft: #252536;
-  --text: #e6e6f0;
-  --muted: #9a9ab0;
-  --accent: #7c3aed;
-  --accent2: #ec4899;
-  --border: #33334a;
-  --user: #5b34b8;
-  --assistant: #2a2a3d;
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --border: #3c3c3c;
+  --text: #cccccc;
+  --muted: #8a8a8a;
+  --accent: #a78bfa;
+  --user: #2f6fed;
+  --assistant: #2a2a2a;
+  --error: #f48771;
 }
 
 * { box-sizing: border-box; }
@@ -18,7 +18,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
 }
 
@@ -32,9 +32,10 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-soft);
+  background: var(--panel);
 }
 
 .brand {
@@ -44,25 +45,36 @@ html, body {
   font-weight: 600;
 }
 
-.spark {
-  background: linear-gradient(135deg, var(--accent), var(--accent2));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font-size: 16px;
+.spark { color: var(--accent); }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  outline: none;
 }
 
 .plan-badge {
   font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 999px;
+  padding: 2px 8px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   color: var(--muted);
   text-transform: capitalize;
 }
-.plan-badge.pro { color: #7c3aed; border-color: #7c3aed; }
-.plan-badge.ultimate { color: #f59e0b; border-color: #f59e0b; }
-.plan-badge.free { color: #6ee7b7; border-color: #6ee7b7; }
+
+.plan-badge.free { color: #8a8a8a; }
+.plan-badge.pro { color: #4fc3f7; border-color: #4fc3f7; }
+.plan-badge.ultimate { color: #ffd54f; border-color: #ffd54f; }
 
 .messages {
   flex: 1;
@@ -70,67 +82,74 @@ html, body {
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .msg {
-  max-width: 92%;
-  padding: 9px 12px;
-  border-radius: 12px;
-  line-height: 1.5;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 10px;
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.5;
 }
+
 .msg.user {
   align-self: flex-end;
   background: var(--user);
+  color: #fff;
 }
+
 .msg.assistant {
   align-self: flex-start;
   background: var(--assistant);
-  border: 1px solid var(--border);
+  color: var(--text);
 }
-.msg.error {
-  align-self: flex-start;
-  background: #3d2225;
-  border: 1px solid #7f1d1d;
-  color: #fca5a5;
-}
+
 .msg.system {
   align-self: center;
-  background: transparent;
   color: var(--muted);
   font-size: 12px;
-  border: none;
+}
+
+.msg.error {
+  align-self: flex-start;
+  background: rgba(244, 135, 113, 0.15);
+  color: var(--error);
 }
 
 .tool-badge {
-  display: inline-block;
+  align-self: flex-start;
   font-size: 11px;
-  padding: 2px 8px;
-  margin: 2px 4px 2px 0;
-  border-radius: 6px;
-  background: #1f2937;
-  border: 1px solid #374151;
-  color: #93c5fd;
+  color: var(--accent);
 }
 
-.loading::after {
-  content: '●';
-  animation: blink 1s infinite;
-  color: var(--accent2);
+.login-card {
+  align-self: center;
+  text-align: center;
+  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
-@keyframes blink {
-  0%, 100% { opacity: 0.2; }
-  50% { opacity: 1; }
+
+.login-card button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .composer {
   display: flex;
+  align-items: flex-end;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
-  background: var(--bg-soft);
+  background: var(--panel);
 }
 
 .composer textarea {
@@ -140,41 +159,20 @@ html, body {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 9px 11px;
+  padding: 8px 10px;
   font-family: inherit;
   font-size: 13px;
   outline: none;
   max-height: 120px;
 }
-.composer textarea:focus { border-color: var(--accent); }
 
 .composer button {
-  background: linear-gradient(135deg, var(--accent), var(--accent2));
-  color: white;
+  background: var(--accent);
+  color: #fff;
   border: none;
   border-radius: 8px;
-  padding: 0 14px;
+  width: 34px;
+  height: 34px;
   cursor: pointer;
-  font-size: 15px;
-}
-.composer button:hover { filter: brightness(1.1); }
-
-/* Login card */
-.login-card {
-  margin: 20px auto;
-  text-align: center;
-  padding: 22px;
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  max-width: 280px;
-}
-.login-card button {
-  margin-top: 12px;
-  background: linear-gradient(135deg, var(--accent), var(--accent2));
-  color: white;
-  border: none;
-  padding: 9px 18px;
-  border-radius: 8px;
-  cursor: pointer;
+  font-size: 16px;
 }

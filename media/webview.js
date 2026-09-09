@@ -12,6 +12,8 @@
   let currentModels = [];
   let activeModel = null;
   let deviceCardEl = null;
+  let meldrixConnected = false;
+  let meldrixModels = [];
 
   function planLabel(p) {
     if (!p || !p.plan) return '–';
@@ -58,7 +60,8 @@
 
   // ---- Model dropdown -------------------------------------------------
   function renderModels(plan) {
-    const models = (plan && plan.models) || [];
+    // If Meldrix is connected, use Meldrix models
+    const models = meldrixConnected ? meldrixModels : (plan && plan.models) || [];
     currentModels = models;
     const active = (plan && plan.activeModel) || models[0]?.id;
 
@@ -159,6 +162,45 @@
     }
   }
 
+  // ---- Meldrix connection status --------------------------------------
+  function showMeldrixStatus() {
+    const statusEl = document.createElement('div');
+    statusEl.className = 'meldrix-status';
+    
+    if (meldrixConnected) {
+      statusEl.innerHTML = `
+        <div class="meldrix-connected">
+          <span class="meldrix-icon">✓</span>
+          <span>Meldrix: Connected</span>
+          <button id="disconnectMeldrixBtn" class="meldrix-btn">Disconnect</button>
+        </div>
+      `;
+      statusEl.querySelector('#disconnectMeldrixBtn').onclick = () => {
+        vscode.postMessage({ type: 'disconnectMeldrix' });
+      };
+    } else {
+      statusEl.innerHTML = `
+        <div class="meldrix-disconnected">
+          <span class="meldrix-icon">⟳</span>
+          <span>Meldrix: Not Connected</span>
+          <button id="connectMeldrixBtn" class="meldrix-btn">Connect</button>
+        </div>
+      `;
+      statusEl.querySelector('#connectMeldrixBtn').onclick = () => {
+        vscode.postMessage({ type: 'connectMeldrix' });
+      };
+    }
+    
+    // Remove existing status if any
+    const existing = document.querySelector('.meldrix-status');
+    if (existing && existing.parentNode) {
+      existing.parentNode.removeChild(existing);
+    }
+    
+    messages.appendChild(statusEl);
+    scrollBottom();
+  }
+
   function sendMessage() {
     const text = input.value.trim();
     if (!text) return;
@@ -213,6 +255,29 @@
       case 'loggedOut':
         removeDeviceCard();
         showLogin();
+        break;
+      case 'meldrixConnected':
+        meldrixConnected = true;
+        meldrixModels = msg.models || [];
+        planBadge.textContent = 'Meldrix';
+        planBadge.className = 'plan-badge ultimate';
+        renderModels({ models: meldrixModels });
+        showMeldrixStatus();
+        break;
+      case 'meldrixDisconnected':
+        meldrixConnected = false;
+        meldrixModels = [];
+        planBadge.textContent = '–';
+        planBadge.className = 'plan-badge';
+        renderModels({ models: [] });
+        showMeldrixStatus();
+        break;
+      case 'usage':
+        // Display token usage if available
+        if (msg.usage) {
+          const usageText = `Tokens: ${msg.usage.inputTokens || '?'} in / ${msg.usage.outputTokens || '?'} out`;
+          addMessage('system', usageText);
+        }
         break;
     }
   });

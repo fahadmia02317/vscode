@@ -37,7 +37,10 @@ export class MeldrixUI {
         <span class="spark">✦</span>
         <span>Meldrix AI</span>
       </div>
-      <div id="planBadge" class="plan-badge">–</div>
+      <div class="topbar-right">
+        <select id="modelSelect" class="model-select" title="AI model"></select>
+        <div id="planBadge" class="plan-badge">–</div>
+      </div>
     </header>
 
     <div id="messages" class="messages"></div>

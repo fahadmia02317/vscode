@@ -7,7 +7,7 @@ import { PlanInfo, ChatRequest, ModelOption, DEFAULT_PLAN, fallbackModelsForPlan
  *
  * Expected backend endpoints (implement these on your Meldrix server):
  *   POST {base}/api/auth/login         -> { token }
- *   GET  {base}/api/plan               -> PlanInfo (uses Bearer token, reads DB)
+ *   GET  {base}/api/plan               -> { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
  *   POST {base}/api/chat               -> streaming SSE response (tool use)
  */
 export class APIClient {
@@ -57,6 +57,10 @@ export class APIClient {
   /**
    * Fetches the current user's subscription plan from the backend DB.
    * Requires a valid auth token (Bearer).
+   *
+   * Actual Meldrix backend response:
+   *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
+   *   { subscription: null }  ->  no subscription (free plan)
    */
   async getPlan(): Promise<PlanInfo> {
     const res = await fetch(`${this.baseUrl()}/api/plan`, {
@@ -73,15 +77,30 @@ export class APIClient {
     return this.normalizePlan(data);
   }
 
-  /** Coerces whatever plan shape the backend returns into a PlanInfo. */
+  /**
+   * Coerces whatever plan shape the backend returns into a PlanInfo.
+   *
+   * Handles both shapes:
+   *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }  <- actual Meldrix
+   *   { plan, planName, models, ... }                                             <- flat fallback
+   */
   private normalizePlan(data: any): PlanInfo {
-    const plan = (data?.plan || data?.tier || 'free').toString().toLowerCase();
-    const features = data?.features || {};
+    // Unwrap the `subscription` object if present (actual Meldrix backend).
+    const sub =
+      data?.subscription && typeof data.subscription === 'object'
+        ? data.subscription
+        : data;
+
+    const status = (sub?.status || 'active').toString().toLowerCase();
+    const plan = (sub?.plan || sub?.tier || 'free').toString().toLowerCase();
+    const features = sub?.features || {};
+
     return {
       plan,
-      planName: data?.planName || data?.name || DEFAULT_PLAN.planName,
-      models: this.normalizeModels(data, plan),
-      activeModel: data?.activeModel || data?.defaultModel || data?.model,
+      planName: sub?.planName || sub?.name || DEFAULT_PLAN.planName,
+      status,
+      models: this.normalizeModels(sub, plan),
+      activeModel: sub?.activeModel || sub?.defaultModel || sub?.model,
       features: {
         chat: features.chat ?? true,
         tools: features.tools ?? (plan === 'pro' || plan === 'ultimate'),
@@ -91,11 +110,11 @@ export class APIClient {
         tts: features.tts ?? plan !== 'free',
       },
       limits: {
-        messagesPerDay: data?.limits?.messagesPerDay ?? 20,
-        usedMessages: data?.limits?.usedMessages,
+        messagesPerDay: sub?.limits?.messagesPerDay ?? 20,
+        usedMessages: sub?.limits?.usedMessages,
       },
-      renewsAt: data?.renewsAt,
-      expiresAt: data?.expiresAt,
+      renewsAt: sub?.renewsAt || sub?.renews_at,
+      expiresAt: sub?.expiresAt || sub?.endDate || sub?.ends_at,
     };
   }
 

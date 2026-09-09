@@ -1,19 +1,26 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PlanInfo, ToolResult } from './types';
+import { PlanInfo, PlanTier, ToolResult, TIER_RANK, normalizeTier } from './types';
 
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, any>;
-  /** Minimum plan tier required to use this tool. */
-  minTier: 'free' | 'pro' | 'ultimate';
+  /**
+   * Minimum plan tier required to use this tool.
+   * Uses the real 4-tier system from lib/constants.ts:
+   *   free | starter | pro | ultimate
+   */
+  minTier: PlanTier;
 }
 
 /**
  * ToolRegistry defines the "agentic" tools the AI can use and executes them
  * against the local VS Code workspace — same idea as Cline's tools.
+ *
+ * Tool availability is gated by the user's subscription tier, mirroring the
+ * backend's `isModelAllowedForTier()` / `getUserPlanTier()` logic.
  */
 export class ToolRegistry {
   private definitions: ToolDefinition[] = [
@@ -28,33 +35,6 @@ export class ToolRegistry {
       minTier: 'free',
     },
     {
-      name: 'write_file',
-      description: 'Create or overwrite a file with the given content.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string' },
-          content: { type: 'string' },
-        },
-        required: ['path', 'content'],
-      },
-      minTier: 'pro',
-    },
-    {
-      name: 'edit_file',
-      description: 'Replace the first occurrence of `search` with `replace` in a file.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string' },
-          search: { type: 'string' },
-          replace: { type: 'string' },
-        },
-        required: ['path', 'search', 'replace'],
-      },
-      minTier: 'pro',
-    },
-    {
       name: 'list_files',
       description: 'List files and folders in a directory.',
       parameters: {
@@ -63,16 +43,6 @@ export class ToolRegistry {
         required: [],
       },
       minTier: 'free',
-    },
-    {
-      name: 'run_command',
-      description: 'Run a shell/terminal command in the integrated terminal.',
-      parameters: {
-        type: 'object',
-        properties: { command: { type: 'string' } },
-        required: ['command'],
-      },
-      minTier: 'ultimate',
     },
     {
       name: 'search',
@@ -87,15 +57,52 @@ export class ToolRegistry {
       },
       minTier: 'free',
     },
+    {
+      name: 'write_file',
+      description: 'Create or overwrite a file with the given content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['path', 'content'],
+      },
+      minTier: 'starter',
+    },
+    {
+      name: 'edit_file',
+      description: 'Replace the first occurrence of `search` with `replace` in a file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          search: { type: 'string' },
+          replace: { type: 'string' },
+        },
+        required: ['path', 'search', 'replace'],
+      },
+      minTier: 'starter',
+    },
+    {
+      name: 'run_command',
+      description: 'Run a shell/terminal command in the integrated terminal.',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+      },
+      minTier: 'pro',
+    },
   ];
 
   constructor(private readonly getPlan: () => PlanInfo | undefined) {}
 
+  /** Returns only the tools unlocked for the user's current tier. */
   getDefinitions(): ToolDefinition[] {
     const plan = this.getPlan();
-    const tier = plan?.plan || 'free';
-    const order = { free: 0, pro: 1, ultimate: 2 } as const;
-    return this.definitions.filter((d) => order[d.minTier] <= order[tier]);
+    const tier: PlanTier = normalizeTier(plan?.plan);
+    return this.definitions.filter((d) => TIER_RANK[d.minTier] <= TIER_RANK[tier]);
   }
 
   publicDefinitions(): { name: string; description: string; parameters: Record<string, any> }[] {
@@ -106,7 +113,24 @@ export class ToolRegistry {
     }));
   }
 
+  /** True when the given tool is allowed on the user's current tier. */
+  isAllowed(name: string): boolean {
+    const def = this.definitions.find((d) => d.name === name);
+    if (!def) return false;
+    const tier: PlanTier = normalizeTier(this.getPlan()?.plan);
+    return TIER_RANK[def.minTier] <= TIER_RANK[tier];
+  }
+
   async execute(name: string, args: Record<string, any>): Promise<ToolResult> {
+    // Enforce the tier gate at execution time too (defence in depth).
+    if (!this.isAllowed(name)) {
+      const tier = normalizeTier(this.getPlan()?.plan);
+      return {
+        success: false,
+        output: `Tool "${name}" is not available on your ${tier} plan. Upgrade to unlock it.`,
+      };
+    }
+
     try {
       switch (name) {
         case 'read_file':

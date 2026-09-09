@@ -62,6 +62,16 @@
         "command": "meldrix.openSettings",
         "title": "Meldrix: Open Settings",
         "icon": "$(gear)"
+      },
+      {
+        "command": "meldrix.connectApiKey",
+        "title": "Meldrix: Connect API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "meldrix.disconnectApiKey",
+        "title": "Meldrix: Disconnect API Key",
+        "icon": "$(key)"
       }
     ],
     "viewsContainers": {
@@ -104,6 +114,16 @@
           "command": "meldrix.showPlan",
           "when": "view == meldrix.view",
           "group": "navigation@3"
+        },
+        {
+          "command": "meldrix.connectApiKey",
+          "when": "view == meldrix.view",
+          "group": "navigation@4"
+        },
+        {
+          "command": "meldrix.disconnectApiKey",
+          "when": "view == meldrix.view",
+          "group": "navigation@5"
         }
       ]
     },

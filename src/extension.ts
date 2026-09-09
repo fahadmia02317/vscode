@@ -511,6 +511,21 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('meldrix.openSettings', () => {
       vscode.commands.executeCommand('workbench.action.openSettings', '@ext:meldrix');
+    }),
+    vscode.commands.registerCommand('meldrix.connectApiKey', async () => {
+      const apiKey = await vscode.window.showInputBox({
+        prompt: 'Enter your Meldrix API key',
+        placeHolder: 'mk_live_xxxxxxxxxxxxxxxxx',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      
+      if (apiKey) {
+        await connectMeldrix(apiKey);
+      }
+    }),
+    vscode.commands.registerCommand('meldrix.disconnectApiKey', async () => {
+      await disconnectMeldrix();
     })
   );
 

@@ -11,10 +11,11 @@ import { MeldrixUI } from './ui';
  * Flow:
  *   1. User logs in (token saved in SecretStorage).
  *   2. On activation (and every login) we fetch the subscription plan
- *      from the backend DB using the auth token.
- *   3. The plan decides which tools are exposed to the AI and in the UI.
- *   4. Chat is streamed from the backend; the AI can invoke tools which we
- *      execute locally (file edit, terminal, search, ...).
+ *      from the meldrix.com backend DB using the auth token.
+ *   3. The plan decides which models are shown in the UI dropdown and
+ *      which tools are exposed to the AI.
+ *   4. Chat is streamed from the backend using the selected model;
+ *      the AI can invoke tools which we execute locally.
  */
 export function activate(context: vscode.ExtensionContext) {
   const auth = new AuthManager(context);
@@ -41,7 +42,7 @@ export function activate(context: vscode.ExtensionContext) {
     send: (payload: any) => void webview.postMessage(payload),
   });
 
-  async function refreshPlan(): Promise<void> {
+  async function refreshPlan(): Promise<PlanInfo | undefined> {
     try {
       const plan = await api.getPlan();
       setPlan(plan);
@@ -50,7 +51,7 @@ export function activate(context: vscode.ExtensionContext) {
         'meldrix.loggedIn',
         true
       );
-      return plan as unknown as void;
+      return plan;
     } catch (e: any) {
       if (e?.message === 'unauthorized' || e?.message?.includes('401')) {
         currentPlan = undefined;
@@ -70,8 +71,9 @@ export function activate(context: vscode.ExtensionContext) {
           const cached = context.workspaceState.get<PlanInfo>('meldrix.plan');
           if (cached) {
             currentPlan = cached;
+            // Show cached plan immediately for a snappy UI.
+            send({ type: 'plan', plan: cached });
           }
-          send({ type: 'plan', plan: cached || DEFAULT_PLAN });
           void refreshPlan().then((p) => {
             if (p) {
               send({ type: 'plan', plan: p });
@@ -87,27 +89,42 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       case 'chat': {
-        await handleChat(msg.text, send);
+        await handleChat(msg.text, msg.model, send);
         break;
       }
     }
   };
 
-  async function handleChat(text: string, send: (p: any) => void) {
+  async function handleChat(text: string, model: string | undefined, send: (p: any) => void) {
     if (!(await auth.isLoggedIn())) {
       send({ type: 'error', text: 'Please login first (Meldrix: Login).' });
       return;
     }
     if (!currentPlan) {
-      await refreshPlan();
+      const p = await refreshPlan();
+      if (p && model) {
+        // After a fresh fetch, (re)send plan so the UI dropdown stays in sync.
+        send({ type: 'plan', plan: p });
+      }
     }
     if (!currentPlan?.features.chat) {
       send({ type: 'error', text: 'Your plan does not include chat. Upgrade to continue.' });
       return;
     }
 
+    // Safety: only allow models that are in the user's plan.
+    const allowed = (currentPlan?.models || []).map((m) => m.id);
+    if (model && allowed.length > 0 && !allowed.includes(model)) {
+      send({
+        type: 'error',
+        text: `Model "${model}" is not available on your ${currentPlan?.planName} plan.`,
+      });
+      return;
+    }
+
     const request = {
       messages: [{ role: 'user' as const, content: text }],
+      model: model || undefined,
       tools: tools.publicDefinitions(),
     };
 
@@ -135,6 +152,7 @@ export function activate(context: vscode.ExtensionContext) {
         // uncomment to close the agentic loop:
         // await api.chatStream({
         //   messages: [...request.messages, { role: 'assistant', content: '' }],
+        //   model,
         //   tools: tools.publicDefinitions(),
         //   toolResults: [{ id: call.id, name: call.name, result: result.output }],
         // }, (chunk) => send({ type: 'token', text: chunk }));
@@ -220,8 +238,10 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       const f = p.features;
+      const modelList = (p.models || []).map((m) => m.name).join(', ');
       const lines = [
         `Plan: ${p.planName} (${p.plan})`,
+        `Models: ${modelList || 'default'}`,
         `Chat: ${f.chat ? '✅' : '❌'}`,
         `Tools (edit/terminal): ${f.tools ? '✅' : '❌'}`,
         `GitHub: ${f.github ? '✅' : '❌'}`,
@@ -231,11 +251,9 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage(lines.join('\n'), { modal: true }, 'OK');
     }),
     vscode.commands.registerCommand('meldrix.refreshPlan', async () => {
-      await refreshPlan();
+      const p = await refreshPlan();
       vscode.window.showInformationMessage(
-        currentPlan
-          ? `Meldrix plan refreshed: ${currentPlan.planName}`
-          : 'Meldrix: not logged in or plan unavailable.'
+        p ? `Meldrix plan refreshed: ${p.planName}` : 'Meldrix: not logged in or plan unavailable.'
       );
     }),
     vscode.commands.registerCommand('meldrix.explainCode', () => {

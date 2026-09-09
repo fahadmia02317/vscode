@@ -1,4 +1,4 @@
-/**
+/** 
  * Shared type definitions for the Meldrix extension.
  *
  * These types mirror the real meldrix.com backend:
@@ -267,3 +267,15 @@ export const DEFAULT_PLAN: PlanInfo = {
   },
   limits: { messagesPerDay: 20 },
 };
+
+/**
+ * Tool definition type used for specifying available tools to the AI model.
+ */
+export interface ToolDefinition {
+  /** Name of the tool. */
+  name: string;
+  /** Description of what the tool does. */
+  description: string;
+  /** Parameters accepted by the tool. */
+  parameters: Record<string, any>;
+}

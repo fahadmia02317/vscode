@@ -143,9 +143,9 @@ export function activate(context: vscode.ExtensionContext) {
         // Determine which provider to use based on available credentials
         const hasApiKey = await meldrixProvider.getApiKey();
         if (hasApiKey) {
-          await handleMeldrixChat(msg.text, msg.model, send);
+          await handleMeldrixChat(msg.text, msg.modelId, send);
         } else {
-          await handleChat(msg.text, msg.model, send);
+          await handleChat(msg.text, msg.modelId, send);
         }
         break;
       }

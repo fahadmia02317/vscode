@@ -2,29 +2,37 @@ import * as vscode from 'vscode';
 import { AuthManager } from './auth';
 import { APIClient } from './api';
 import { ToolRegistry } from './tools';
-import { PlanInfo, DEFAULT_PLAN, ToolCall } from './types';
+import { PlanInfo, DEFAULT_PLAN, ToolCall, ChatRequest } from './types';
 import { MeldrixUI } from './ui';
 
 /**
  * Meldrix AI — VS Code extension entry point.
  *
- * Authentication uses the Device Authorization Flow:
- *   1. User clicks "Login". We call POST /api/auth/device and receive a short
- *      userCode (e.g. 6 digits) + deviceCode.
- *   2. We open the browser at meldrix.com/authtoken and show the code in the
- *      webview. The user signs in with their Gmail and enters the code.
- *   3. We poll POST /api/auth/device/token until the backend returns a token,
- *      which is stored securely in VS Code SecretStorage.
- *   4. On activation (and after every login) we fetch the subscription from
- *      the meldrix.com backend DB using the auth token:
- *        GET {planEndpoint}  (Authorization: Bearer <token>)
- *      Backend returns:
- *        { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
- *      (or { subscription: null } when there is no subscription.)
- *   5. The plan decides which models are shown in the UI dropdown and which
- *      tools are exposed to the AI.
- *   6. Chat is streamed from the backend using the selected model; the AI can
- *      invoke tools which we execute locally against the workspace.
+ * Mirrors the real meldrix.com backend:
+ *
+ * ── AUTH (lib/auth/cli.ts — Device Authorization Flow) ───────────────────
+ *   1. User clicks "Login". POST {deviceEndpoint} -> createDeviceAuthorization()
+ *      returns { deviceCode, userCode, verificationUri, expiresIn, interval }.
+ *   2. We open the browser at meldrix.com/authtoken and show the userCode in
+ *      the webview + a modal. The user signs in with Gmail and enters the code
+ *      -> approveDeviceAuthorization(userCode, user).
+ *   3. We poll POST {deviceTokenEndpoint} -> issueCliSession(deviceCode)
+ *      returns { accessToken, refreshToken, expiresAt }, stored securely in
+ *      VS Code SecretStorage. The accessToken is what
+ *      `getAuthenticatedDbUser(request)` validates via `getCliSession(token)`.
+ *
+ * ── PLAN (app/api/subscription) ──────────────────────────────────────────
+ *   GET {planEndpoint} (Authorization: Bearer <accessToken>)
+ *   -> { subscription: { status, plan, endDate, renewsAt, ...(row.data) } }
+ *   -> { subscription: null } when there is no subscription (free tier).
+ *   Tiers are the FOUR from getUserPlanTier(): free | starter | pro | ultimate.
+ *   The plan decides which models appear in the UI dropdown (mirroring
+ *   MODEL_TIER_REQUIREMENTS + isModelAllowedForTier) and which tools are exposed.
+ *
+ * ── CHAT (app/api/chat) ──────────────────────────────────────────────────
+ *   POST { messages, id?, modelId, enableSearch?, githubToken?, githubContext?, fileContext? }
+ *   -> streamText().toUIMessageStreamResponse() (AI SDK UI message stream).
+ *   The AI can invoke local agentic tools which we execute against the workspace.
  */
 export function activate(context: vscode.ExtensionContext) {
   const auth = new AuthManager(context);
@@ -37,6 +45,9 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   const tools = new ToolRegistry(() => currentPlan);
+
+  /** Remembered so the webview "Open Browser" button can re-open the sign-in page. */
+  let lastVerificationUri: string | undefined;
 
   // ---- Status bar indicator -------------------------------------------
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -59,7 +70,7 @@ export function activate(context: vscode.ExtensionContext) {
       return plan;
     } catch (e: any) {
       if (e?.message === 'unauthorized' || e?.message?.includes('401')) {
-        // Token is invalid/expired -> force a fresh login.
+        // Token is invalid/expired and could not be refreshed -> force re-login.
         currentPlan = undefined;
         void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', false);
       }
@@ -108,6 +119,23 @@ export function activate(context: vscode.ExtensionContext) {
         await handleChat(msg.text, msg.model, send);
         break;
       }
+
+      // ── Webview device-code card actions (previously unhandled) ────────
+      case 'copyCode': {
+        const code = msg.userCode ? String(msg.userCode) : undefined;
+        if (code) {
+          await vscode.env.clipboard.writeText(code);
+          send({ type: 'status', text: `Code ${code} copied to clipboard.` });
+        }
+        break;
+      }
+
+      case 'openBrowser': {
+        const uri = msg.verificationUri || lastVerificationUri || api.verificationUri();
+        lastVerificationUri = uri;
+        void vscode.env.openExternal(vscode.Uri.parse(uri));
+        break;
+      }
     }
   };
 
@@ -130,7 +158,8 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Safety: only allow models that are in the user's plan.
+    // Safety: only allow models that are in the user's plan (mirrors
+    // isModelAllowedForTier on the backend, which returns 402 when denied).
     const allowed = (currentPlan?.models || []).map((m) => m.id);
     if (model && allowed.length > 0 && !allowed.includes(model)) {
       send({
@@ -140,9 +169,11 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const request = {
+    // Backend chat route expects `modelId` (not `model`).
+    const request: ChatRequest = {
       messages: [{ role: 'user' as const, content: text }],
-      model: model || undefined,
+      modelId: model || undefined,
+      enableSearch: currentPlan?.features.webSearch,
       tools: tools.publicDefinitions(),
     };
 
@@ -172,7 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
         // await api.chatStream(
         //   {
         //     messages: [...request.messages, { role: 'assistant', content: '' }],
-        //     model,
+        //     modelId: model,
         //     tools: tools.publicDefinitions(),
         //     toolResults: [{ id: call.id, name: call.name, result: result.output }],
         //   },
@@ -182,7 +213,16 @@ export function activate(context: vscode.ExtensionContext) {
 
       send({ type: 'done' });
     } catch (e: any) {
-      send({ type: 'error', text: e?.message || 'Chat failed' });
+      const message = e?.message || 'Chat failed';
+      if (message === 'unauthorized' || message.includes('401')) {
+        // Access token expired and refresh failed -> prompt re-login.
+        currentPlan = undefined;
+        void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', false);
+        send({ type: 'loggedOut' });
+        send({ type: 'error', text: 'Session expired. Please login again.' });
+      } else {
+        send({ type: 'error', text: message });
+      }
     }
   }
 
@@ -192,7 +232,8 @@ export function activate(context: vscode.ExtensionContext) {
     if (toolCall.function) {
       toolCall = toolCall.function;
     }
-    if (!toolCall.name) return undefined;
+    const name = toolCall.name || toolCall.toolName;
+    if (!name) return undefined;
     let args = toolCall.arguments ?? toolCall.args ?? {};
     if (typeof args === 'string') {
       try {
@@ -201,7 +242,7 @@ export function activate(context: vscode.ExtensionContext) {
         args = {};
       }
     }
-    return { id: toolCall.id || String(Math.random()), name: toolCall.name, arguments: args };
+    return { id: toolCall.id || toolCall.toolCallId || String(Math.random()), name, arguments: args };
   }
 
   // ---- Login command (Device Authorization Flow) -----------------------
@@ -218,8 +259,14 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
+        lastVerificationUri = device.verificationUri;
+
         // 1) Show the code + verification URL in the webview.
-        send?.({ type: 'deviceCode', userCode: device.userCode, verificationUri: device.verificationUri });
+        send?.({
+          type: 'deviceCode',
+          userCode: device.userCode,
+          verificationUri: device.verificationUri,
+        });
 
         // 2) Open the browser to the verification URL.
         void vscode.env.openExternal(vscode.Uri.parse(device.verificationUri));
@@ -240,35 +287,40 @@ export function activate(context: vscode.ExtensionContext) {
           void vscode.env.openExternal(vscode.Uri.parse(device.verificationUri));
         }
 
-        // 4) Poll for the token.
+        // 4) Poll for the CLI session (accessToken + refreshToken).
         const deadline = Date.now() + (device.expiresIn || 600) * 1000;
         const intervalMs = (device.interval || 5) * 1000;
-        let token: string | undefined;
+        let session: Awaited<ReturnType<APIClient['pollForSession']>> | undefined;
 
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, intervalMs));
           try {
-            token = await api.pollForToken(device.deviceCode);
+            session = await api.pollForSession(device.deviceCode);
             break;
           } catch (e: any) {
             const code = e?.code;
             if (code === 'expired_token' || code === 'access_denied') {
-              vscode.window.showErrorMessage(`Meldrix sign-in ${code === 'expired_token' ? 'expired' : 'denied'}.`);
-              send?.({ type: 'error', text: `Sign-in ${code === 'expired_token' ? 'expired' : 'denied'}. Please try again.` });
+              vscode.window.showErrorMessage(
+                `Meldrix sign-in ${code === 'expired_token' ? 'expired' : 'denied'}.`
+              );
+              send?.({
+                type: 'error',
+                text: `Sign-in ${code === 'expired_token' ? 'expired' : 'denied'}. Please try again.`,
+              });
               return;
             }
             // authorization_pending / slow_down -> keep polling
           }
         }
 
-        if (!token) {
+        if (!session?.accessToken) {
           vscode.window.showErrorMessage('Meldrix sign-in timed out. Please try again.');
           send?.({ type: 'error', text: 'Sign-in timed out. Please try again.' });
           return;
         }
 
-        // 5) Save token, fetch plan, and update UI.
-        await auth.saveToken(token);
+        // 5) Save the full CLI session, fetch plan, and update UI.
+        await auth.saveSession(session);
         const plan = await api.getPlan();
         setPlan(plan);
         void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', true);
@@ -283,8 +335,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('meldrix.login', () => commandLogin()),
     vscode.commands.registerCommand('meldrix.logout', async () => {
+      await api.revokeSession();
       await auth.clearToken();
       currentPlan = undefined;
+      void context.workspaceState.update('meldrix.plan', undefined);
       void vscode.commands.executeCommand('setContext', 'meldrix.loggedIn', false);
       vscode.window.showInformationMessage('Meldrix: logged out.');
     }),
@@ -309,6 +363,7 @@ export function activate(context: vscode.ExtensionContext) {
         `Tools (edit/terminal): ${f.tools ? '✅' : '❌'}`,
         `GitHub: ${f.github ? '✅' : '❌'}`,
         `Image: ${f.imageGeneration ? '✅' : '❌'}  Video: ${f.videoGeneration ? '✅' : '❌'}  TTS: ${f.tts ? '✅' : '❌'}`,
+        `Web search: ${f.webSearch ? '✅' : '❌'}`,
         `Messages/day: ${p.limits.messagesPerDay}${p.limits.usedMessages ? ` (used ${p.limits.usedMessages})` : ''}`,
         p.renewsAt ? `Renews: ${new Date(p.renewsAt).toLocaleDateString()}` : '',
         p.expiresAt ? `Expires: ${new Date(p.expiresAt).toLocaleDateString()}` : '',
@@ -347,9 +402,7 @@ export function activate(context: vscode.ExtensionContext) {
       const ui = new MeldrixUI(context, handleMessage);
       view.webview.options = { enableScripts: true };
       view.webview.html = ui.getHtml(view.webview);
-      view.webview.onDidReceiveMessage((m) =>
-        handleMessage(m, post(view.webview).send)
-      );
+      view.webview.onDidReceiveMessage((m) => handleMessage(m, post(view.webview).send));
     }
   }
   context.subscriptions.push(
@@ -374,9 +427,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
     const ui = new MeldrixUI(context, handleMessage);
     panel.webview.html = ui.getHtml(panel.webview);
-    panel.webview.onDidReceiveMessage((m) =>
-      handleMessage(m, post(panel!.webview).send)
-    );
+    panel.webview.onDidReceiveMessage((m) => handleMessage(m, post(panel!.webview).send));
     panel.onDidDispose(() => (panel = undefined));
     return panel;
   }

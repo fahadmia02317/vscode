@@ -218,6 +218,61 @@ html, body {
   50% { opacity: 0.4; }
 }
 
+/* ---- Meldrix connection status -------------------------------------- */
+.meldrix-status {
+  align-self: center;
+  width: 100%;
+  max-width: -webkit-fit-content;
+  max-width: -moz-fit-content;
+  max-width: fit-content;
+  margin: -4px 0 8px 0;
+}
+
+.meldrix-connected,
+.meldrix-disconnected {
+  display: flex;
+  align-items: center;
+  gap: -webkit-calc(8px);
+  gap: calc(8px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.meldrix-connected {
+  border-color: #81c784;
+  color: #81c784;
+}
+
+.meldrix-disconnected {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.meldrix-icon {
+  font-size: -webkit-calc(14px);
+  font-size: calc(14px);
+  font-weight: bold;
+}
+
+.meldrix-btn {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+.meldrix-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .composer {
   display: flex;
   align-items: flex-end;

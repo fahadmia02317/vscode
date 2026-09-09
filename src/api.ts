@@ -316,8 +316,8 @@ export class APIClient {
       features: {
         chat: features.chat ?? true,
         tools: features.tools ?? plan !== 'free',
-        github: features.github ?? plan === 'pro' || plan === 'ultimate',
-        imageGeneration: features.imageGeneration ?? plan === 'pro' || plan === 'ultimate',
+        github: features.github ?? (plan === 'pro' || plan === 'ultimate'),
+        imageGeneration: features.imageGeneration ?? (plan === 'pro' || plan === 'ultimate'),
         videoGeneration: features.videoGeneration ?? plan === 'ultimate',
         tts: features.tts ?? plan !== 'free',
         webSearch: features.webSearch ?? plan !== 'free',

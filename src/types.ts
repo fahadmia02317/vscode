@@ -44,6 +44,26 @@ export interface PlanInfo {
   expiresAt?: string;
 }
 
+/**
+ * Device Authorization Flow payload (RFC 8628 style, like GitHub/Google).
+ *
+ * Step 1 — POST /api/auth/device returns this. The user opens
+ * `verificationUri` in a browser, signs in with their Gmail, and enters
+ * the short `userCode` (e.g. 6 digits).
+ */
+export interface DeviceAuthInfo {
+  /** Long-lived identifier used to poll for the token. */
+  deviceCode: string;
+  /** Short human-enterable code shown to the user (e.g. "A1B2-C3D4" or 6 digits). */
+  userCode: string;
+  /** URL the user opens to sign in & authorize (e.g. https://meldrix.com/authtoken). */
+  verificationUri: string;
+  /** Seconds until the codes expire. */
+  expiresIn: number;
+  /** Polling interval in seconds. */
+  interval: number;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;

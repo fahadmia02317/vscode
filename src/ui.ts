@@ -49,6 +49,17 @@ export class MeldrixUI {
       <textarea id="input" rows="1" placeholder="Ask Meldrix to build, explain or debug..."></textarea>
       <button id="send" title="Send">➤</button>
     </div>
+    
+    <!-- Meldrix API Key Connection Panel -->
+    <div id="meldrixConnectPanel" class="meldrix-connect-panel hidden">
+      <h3>Connect to Meldrix</h3>
+      <p>Enter your Meldrix API key to use the Meldrix backend directly.</p>
+      <input type="password" id="apiKeyInput" placeholder="mk_live_xxxxxxxxxxxxxxxxx" />
+      <div class="connect-buttons">
+        <button id="connectBtn">Connect</button>
+        <button id="cancelConnectBtn">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <script nonce="${nonce}" src="${scriptUri}"></script>

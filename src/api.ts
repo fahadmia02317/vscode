@@ -5,22 +5,42 @@ import { PlanInfo, ChatRequest, ModelOption, DEFAULT_PLAN, fallbackModelsForPlan
 /**
  * APIClient talks to the Meldrix backend (https://meldrix.com by default).
  *
- * Expected backend endpoints (implement these on your Meldrix server):
- *   POST {base}/api/auth/login         -> { token }
- *   GET  {base}/api/plan               -> { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
- *   POST {base}/api/chat               -> streaming SSE response (tool use)
+ * The real Meldrix backend (Next.js) exposes routes that use
+ * `getAuthenticatedDbUser(request)` and query PostgreSQL via
+ * `getSubscriptionByEmail(email)`. The subscription route returns:
+ *
+ *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
+ *   { subscription: null }   ->  user has no subscription (free plan)
+ *
+ * Endpoints are configurable so they can be pointed at the exact routes in
+ * the production meldrix.com app.
  */
 export class APIClient {
   constructor(private readonly auth: AuthManager) {}
 
+  private config<T>(key: string, def: T): T {
+    return vscode.workspace.getConfiguration('meldrix').get<T>(key, def);
+  }
+
   baseUrl(): string {
-    let base = vscode.workspace
-      .getConfiguration('meldrix')
-      .get<string>('apiBaseUrl', 'https://meldrix.com');
-    if (!base) {
-      base = 'https://meldrix.com';
-    }
+    const base = this.config<string>('apiBaseUrl', 'https://meldrix.com') || 'https://meldrix.com';
     return base.replace(/\/+$/, '');
+  }
+
+  /** Builds the full URL for login / plan / chat endpoints. */
+  endpoint(kind: 'login' | 'plan' | 'chat'): string {
+    const path =
+      {
+        login: this.config<string>('loginEndpoint', '/api/auth/login'),
+        plan: this.config<string>('planEndpoint', '/api/subscription'),
+        chat: this.config<string>('chatEndpoint', '/api/chat'),
+      }[kind] || '';
+
+    const trimmed = path.trim();
+    if (!trimmed.startsWith('/')) {
+      return `${this.baseUrl()}/${trimmed}`;
+    }
+    return `${this.baseUrl()}${trimmed}`;
   }
 
   private async headers(extra: Record<string, string> = {}): Promise<Record<string, string>> {
@@ -37,7 +57,7 @@ export class APIClient {
 
   /** Logs the user in with email/password and returns an auth token. */
   async login(email: string, password: string): Promise<string> {
-    const res = await fetch(`${this.baseUrl()}/api/auth/login`, {
+    const res = await fetch(this.endpoint('login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -47,23 +67,29 @@ export class APIClient {
     if (!res.ok) {
       throw new Error(data?.error || data?.message || `Login failed (${res.status})`);
     }
-    const token = data?.token || data?.accessToken || data?.access_token;
+    const token =
+      data?.token ||
+      data?.accessToken ||
+      data?.access_token ||
+      data?.jwt ||
+      data?.session?.token;
     if (!token) {
       throw new Error('Login succeeded but no token was returned by the backend.');
     }
-    return token as string;
+    return String(token);
   }
 
   /**
    * Fetches the current user's subscription plan from the backend DB.
-   * Requires a valid auth token (Bearer).
+   * Requires a valid auth token (Bearer), exactly like the production route
+   * that calls `getAuthenticatedDbUser(request)`.
    *
    * Actual Meldrix backend response:
    *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
    *   { subscription: null }  ->  no subscription (free plan)
    */
   async getPlan(): Promise<PlanInfo> {
-    const res = await fetch(`${this.baseUrl()}/api/plan`, {
+    const res = await fetch(this.endpoint('plan'), {
       headers: await this.headers(),
     });
 
@@ -78,29 +104,34 @@ export class APIClient {
   }
 
   /**
-   * Coerces whatever plan shape the backend returns into a PlanInfo.
+   * Coerces the backend response into a PlanInfo.
    *
-   * Handles both shapes:
-   *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }  <- actual Meldrix
-   *   { plan, planName, models, ... }                                             <- flat fallback
+   * Handles:
+   *   { subscription: { status, plan, endDate, renewsAt, ...(row.data || {}) } }
+   *   { subscription: null }                                    -> free plan
+   *   { plan, planName, models, ... }                           -> flat fallback
    */
   private normalizePlan(data: any): PlanInfo {
-    // Unwrap the `subscription` object if present (actual Meldrix backend).
+    // No subscription at all -> free plan.
+    const subRaw = data?.subscription;
     const sub =
-      data?.subscription && typeof data.subscription === 'object'
-        ? data.subscription
-        : data;
+      subRaw && typeof subRaw === 'object' ? subRaw : (subRaw === null ? null : data);
+
+    if (!sub) {
+      return this.freePlan();
+    }
 
     const status = (sub?.status || 'active').toString().toLowerCase();
     const plan = (sub?.plan || sub?.tier || 'free').toString().toLowerCase();
     const features = sub?.features || {};
+    const limits = sub?.limits || sub?.usage || {};
 
     return {
       plan,
-      planName: sub?.planName || sub?.name || DEFAULT_PLAN.planName,
+      planName: sub?.planName || sub?.name || sub?.plan_label || DEFAULT_PLAN.planName,
       status,
       models: this.normalizeModels(sub, plan),
-      activeModel: sub?.activeModel || sub?.defaultModel || sub?.model,
+      activeModel: sub?.activeModel || sub?.defaultModel || sub?.model || sub?.default_model,
       features: {
         chat: features.chat ?? true,
         tools: features.tools ?? (plan === 'pro' || plan === 'ultimate'),
@@ -110,24 +141,37 @@ export class APIClient {
         tts: features.tts ?? plan !== 'free',
       },
       limits: {
-        messagesPerDay: sub?.limits?.messagesPerDay ?? 20,
-        usedMessages: sub?.limits?.usedMessages,
+        messagesPerDay: limits?.messagesPerDay ?? limits?.dailyLimit ?? 20,
+        usedMessages: limits?.usedMessages ?? limits?.used,
       },
       renewsAt: sub?.renewsAt || sub?.renews_at,
       expiresAt: sub?.expiresAt || sub?.endDate || sub?.ends_at,
     };
   }
 
+  private freePlan(): PlanInfo {
+    return {
+      ...DEFAULT_PLAN,
+      status: 'active',
+    };
+  }
+
   /**
    * Normalizes the models array from the backend into ModelOption[].
-   * Supports multiple backend shapes:
-   *   models: ["claude", "gemini"]
-   *   models: [{ id, name, provider }]
-   *   modelList / availableModels / models nested in an object
+   *
+   * Because models come from `...(row.data || {})` in the production route,
+   * the exact key is flexible. Supported keys:
+   *   models, modelList, availableModels, aiModels, ai_models
+   * Each entry can be a string or { id|key|slug, name|label, provider }.
    */
   private normalizeModels(data: any, plan: string): ModelOption[] {
     const raw =
-      data?.models || data?.modelList || data?.availableModels || data?.plans?.models;
+      data?.models ||
+      data?.modelList ||
+      data?.availableModels ||
+      data?.aiModels ||
+      data?.ai_models ||
+      data?.plans?.models;
 
     if (Array.isArray(raw) && raw.length > 0) {
       const mapped = raw
@@ -150,16 +194,14 @@ export class APIClient {
       }
     }
 
-    // If the backend returned a flat list of strings, fall back by plan tier.
+    // If backend did not list models explicitly, derive from the plan tier.
     return fallbackModelsForPlan(plan);
   }
 
   /**
    * Streams a chat completion from the backend.
    * `onToken` is called for each streamed text chunk; returns the full text.
-   *
-   * The backend is expected to stream Server-Sent Events where each `data:`
-   * line is either raw text or JSON shaped like `{ "content": "..." }`.
+   * `onToolCall` is called for each tool invocation the AI requests.
    */
   async chatStream(
     request: ChatRequest,
@@ -171,7 +213,7 @@ export class APIClient {
       .getConfiguration('meldrix')
       .get<string>('model', 'auto');
     const model = request.model || configModel || 'auto';
-    const res = await fetch(`${this.baseUrl()}/api/chat`, {
+    const res = await fetch(this.endpoint('chat'), {
       method: 'POST',
       headers: await this.headers(),
       body: JSON.stringify({ ...request, model }),

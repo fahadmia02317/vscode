@@ -2,7 +2,7 @@
   "name": "meldrix-ai",
   "displayName": "Meldrix AI",
   "description": "All-in-one AI assistant for VS Code — Claude, Gemini & Grok with GitHub editing, image/video generation, TTS and agentic tools.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "meldrix",
   "license": "MIT",
   "engines": {
@@ -118,43 +118,47 @@
         "meldrix.deviceEndpoint": {
           "type": "string",
           "default": "/api/auth/device",
-          "markdownDescription": "Device Authorization Flow step 1: returns `{ deviceCode, userCode, verificationUri?, expiresIn?, interval? }`."
+          "markdownDescription": "Device Authorization Flow step 1 (`createDeviceAuthorization`): returns `{ deviceCode, userCode, verificationUri?, expiresIn?, interval? }`."
         },
         "meldrix.deviceTokenEndpoint": {
           "type": "string",
           "default": "/api/auth/device/token",
-          "markdownDescription": "Device Authorization Flow step 2: POST `{ deviceCode }`. Returns `{ token }` on success, or `{ error: 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied' }`."
+          "markdownDescription": "Device Authorization Flow step 2 (`issueCliSession`): POST `{ deviceCode }`. Returns `{ accessToken, refreshToken?, expiresAt? }` on success, or `{ error: 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied' }`."
+        },
+        "meldrix.refreshEndpoint": {
+          "type": "string",
+          "default": "/api/auth/device/refresh",
+          "markdownDescription": "Token refresh endpoint (`refreshCliSession`): POST `{ refreshToken }` -> `{ accessToken, refreshToken?, expiresAt? }`. Called automatically when the access token is expired."
         },
         "meldrix.verificationUri": {
           "type": "string",
           "default": "https://meldrix.com/authtoken",
-          "markdownDescription": "URL opened in the browser for the user to sign in (Gmail) and enter the 6-digit code."
+          "markdownDescription": "URL opened in the browser for the user to sign in (Gmail) and enter the code."
         },
         "meldrix.planEndpoint": {
           "type": "string",
           "default": "/api/subscription",
           "markdownDescription": "Path for the subscription/plan endpoint. This is the route that calls `getAuthenticatedDbUser` + `getSubscriptionByEmail` and returns `{ subscription: { status, plan, endDate, renewsAt, ...row.data } }`."
         },
+        "meldrix.modelsEndpoint": {
+          "type": "string",
+          "default": "/api/models",
+          "markdownDescription": "Optional endpoint returning the models allowed for the caller's tier (uses `MODEL_TIER_REQUIREMENTS` + `isModelAllowedForTier`). Used when the subscription payload has no explicit model list."
+        },
         "meldrix.chatEndpoint": {
           "type": "string",
           "default": "/api/chat",
-          "markdownDescription": "Path for the streaming chat endpoint."
+          "markdownDescription": "Path for the streaming chat endpoint (`streamText().toUIMessageStreamResponse()`). Body: `{ messages, id?, modelId, enableSearch?, githubToken?, githubContext?, fileContext? }`."
         },
         "meldrix.authToken": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Optional static auth token. Prefer device sign-in which stores the token securely."
+          "markdownDescription": "Optional static auth token (testing only). Prefer device sign-in which stores the CLI session securely."
         },
         "meldrix.model": {
           "type": "string",
-          "default": "auto",
-          "enum": [
-            "auto",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "description": "Which model to route chat through (auto = backend decides)."
+          "default": "",
+          "markdownDescription": "Default model id sent as `modelId` to the chat route. Leave empty to use the model selected in the UI dropdown (which is populated from your plan)."
         }
       }
     }

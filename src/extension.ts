@@ -2,8 +2,9 @@ import * as vscode from 'vscode';
 import { AuthManager } from './auth';
 import { APIClient } from './api';
 import { ToolRegistry } from './tools';
-import { PlanInfo, DEFAULT_PLAN, ToolCall, ChatRequest } from './types';
+import { PlanInfo, DEFAULT_PLAN, ToolCall, ChatRequest, MeldrixModel } from './types';
 import { MeldrixUI } from './ui';
+import { MeldrixProvider } from './meldrix-provider';
 
 /**
  * Meldrix AI — VS Code extension entry point.
@@ -37,6 +38,7 @@ import { MeldrixUI } from './ui';
 export function activate(context: vscode.ExtensionContext) {
   const auth = new AuthManager(context);
   const api = new APIClient(auth);
+  const meldrixProvider = new MeldrixProvider(context);
 
   let currentPlan: PlanInfo | undefined = undefined;
   const setPlan = (p: PlanInfo) => {
@@ -91,6 +93,18 @@ export function activate(context: vscode.ExtensionContext) {
   const handleMessage = async (msg: any, send: (p: any) => void) => {
     switch (msg.type) {
       case 'ready': {
+        // Check if we have a Meldrix API key first
+        const hasApiKey = await meldrixProvider.getApiKey();
+        if (hasApiKey) {
+          try {
+            const models = await meldrixProvider.getModels();
+            send({ type: 'meldrixConnected', models });
+            break;
+          } catch (e) {
+            // API key might be invalid, fall through to device auth
+          }
+        }
+
         if (!(await auth.isLoggedIn())) {
           send({ type: 'status', text: 'Connect your Meldrix account to get started.' });
           send({ type: 'loggedOut' });
@@ -115,8 +129,24 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       }
 
+      case 'connectMeldrix': {
+        await connectMeldrix(msg.apiKey, send);
+        break;
+      }
+
+      case 'disconnectMeldrix': {
+        await disconnectMeldrix(send);
+        break;
+      }
+
       case 'chat': {
-        await handleChat(msg.text, msg.model, send);
+        // Determine which provider to use based on available credentials
+        const hasApiKey = await meldrixProvider.getApiKey();
+        if (hasApiKey) {
+          await handleMeldrixChat(msg.text, msg.model, send);
+        } else {
+          await handleChat(msg.text, msg.model, send);
+        }
         break;
       }
 
@@ -226,6 +256,64 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
 
+  async function handleMeldrixChat(text: string, model: string | undefined, send: (p: any) => void) {
+    // For Meldrix API key mode, we don't need to check plan or authentication
+    // The backend handles all model entitlement and access control
+    
+    if (!model) {
+      send({ type: 'error', text: 'Please select a model.' });
+      return;
+    }
+
+    const messages = [{ role: 'user' as const, content: text }];
+    const toolDefs = tools.publicDefinitions();
+
+    // Collect the AI's tool calls for the agentic loop.
+    const pendingToolCalls: ToolCall[] = [];
+
+    try {
+      await meldrixProvider.streamChat(
+        messages,
+        model,
+        toolDefs,
+        (chunk) => send({ type: 'token', text: chunk }),
+        (toolCall: any) => {
+          const normalized = normalizeToolCall(toolCall);
+          if (normalized) {
+            pendingToolCalls.push(normalized);
+            send({ type: 'tool', name: normalized.name });
+          }
+        },
+        (usage) => {
+          // Send token usage information if available
+          send({ type: 'usage', usage });
+        }
+      );
+
+      // Execute any tool calls locally and report the result.
+      for (const call of pendingToolCalls) {
+        const result = await tools.execute(call.name, call.arguments);
+        send({ type: 'status', text: `⚙ ${call.name} → ${result.success ? 'ok' : 'failed'}` });
+        // In a full implementation, we would send the tool result back to Meldrix
+        // for the next turn of the conversation
+      }
+
+      send({ type: 'done' });
+    } catch (e: any) {
+      const message = e?.message || 'Chat failed';
+      if (message.includes('invalid or expired')) {
+        send({ type: 'meldrixDisconnected' });
+        send({ type: 'error', text: 'Meldrix API key is invalid or expired. Please reconnect.' });
+      } else if (message.includes('not available on your plan')) {
+        send({ type: 'error', text: 'This model is not available on your Meldrix plan.' });
+      } else if (message.includes('Rate limit')) {
+        send({ type: 'error', text: 'Rate limit reached. Please try again later.' });
+      } else {
+        send({ type: 'error', text: message });
+      }
+    }
+  }
+
   function normalizeToolCall(toolCall: any): ToolCall | undefined {
     if (!toolCall) return undefined;
     // Accept { name, arguments } or { function: { name, arguments } }.
@@ -243,6 +331,36 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }
     return { id: toolCall.id || toolCall.toolCallId || String(Math.random()), name, arguments: args };
+  }
+
+  // ---- Meldrix API Key Connection -------------------------------------
+  async function connectMeldrix(apiKey: string, send?: (p: any) => void) {
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Connecting to Meldrix...' },
+      async () => {
+        try {
+          const isValid = await meldrixProvider.testConnection(apiKey);
+          if (isValid) {
+            await meldrixProvider.setApiKey(apiKey);
+            const models = await meldrixProvider.getModels();
+            send?.({ type: 'meldrixConnected', models });
+            vscode.window.showInformationMessage('Meldrix: connected successfully');
+          } else {
+            send?.({ type: 'error', text: 'Invalid Meldrix API key.' });
+            vscode.window.showErrorMessage('Meldrix: invalid API key');
+          }
+        } catch (e: any) {
+          send?.({ type: 'error', text: `Connection failed: ${e?.message}` });
+          vscode.window.showErrorMessage(`Meldrix connection failed: ${e?.message}`);
+        }
+      }
+    );
+  }
+
+  async function disconnectMeldrix(send?: (p: any) => void) {
+    await meldrixProvider.clearApiKey();
+    send?.({ type: 'meldrixDisconnected' });
+    vscode.window.showInformationMessage('Meldrix: disconnected');
   }
 
   // ---- Login command (Device Authorization Flow) -----------------------

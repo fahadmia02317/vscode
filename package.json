@@ -115,10 +115,20 @@
           "default": "https://meldrix.com",
           "markdownDescription": "Meldrix backend API base URL (without trailing slash)."
         },
-        "meldrix.loginEndpoint": {
+        "meldrix.deviceEndpoint": {
           "type": "string",
-          "default": "/api/auth/login",
-          "markdownDescription": "Path for the login endpoint (returns an auth token on success)."
+          "default": "/api/auth/device",
+          "markdownDescription": "Device Authorization Flow step 1: returns `{ deviceCode, userCode, verificationUri?, expiresIn?, interval? }`."
+        },
+        "meldrix.deviceTokenEndpoint": {
+          "type": "string",
+          "default": "/api/auth/device/token",
+          "markdownDescription": "Device Authorization Flow step 2: POST `{ deviceCode }`. Returns `{ token }` on success, or `{ error: 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied' }`."
+        },
+        "meldrix.verificationUri": {
+          "type": "string",
+          "default": "https://meldrix.com/authtoken",
+          "markdownDescription": "URL opened in the browser for the user to sign in (Gmail) and enter the 6-digit code."
         },
         "meldrix.planEndpoint": {
           "type": "string",
@@ -133,7 +143,7 @@
         "meldrix.authToken": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Optional static auth token. Prefer the **Meldrix: Login** command which stores the token securely."
+          "markdownDescription": "Optional static auth token. Prefer device sign-in which stores the token securely."
         },
         "meldrix.model": {
           "type": "string",

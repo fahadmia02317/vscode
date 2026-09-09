@@ -18,6 +18,7 @@
     return p.planName || p.plan;
   }
   function planClass(p) {
+    // 4-tier system: free | starter | pro | ultimate
     return p && p.plan ? p.plan : '';
   }
 
@@ -77,7 +78,7 @@
       modelSelect.appendChild(opt);
     });
 
-    if (active) {
+    if (active && models.some((m) => m.id === active)) {
       modelSelect.value = active;
       activeModel = active;
     } else if (models.length > 0) {
@@ -136,7 +137,8 @@
 
     const openBtn = document.createElement('button');
     openBtn.textContent = 'Open Browser';
-    openBtn.onclick = () => vscode.postMessage({ type: 'openBrowser' });
+    openBtn.onclick = () =>
+      vscode.postMessage({ type: 'openBrowser', verificationUri });
     actions.appendChild(openBtn);
 
     deviceCardEl.appendChild(actions);
@@ -162,7 +164,8 @@
     if (!text) return;
     input.value = '';
     addMessage('user', text);
-    vscode.postMessage({ type: 'chat', text, model: activeModel });
+    // Backend chat route expects `modelId`.
+    vscode.postMessage({ type: 'chat', text, modelId: activeModel });
   }
 
   send.addEventListener('click', sendMessage);
@@ -209,8 +212,7 @@
         break;
       case 'loggedOut':
         removeDeviceCard();
-        planBadge.textContent = 'not logged in';
-        planBadge.className = 'plan-badge';
+        showLogin();
         break;
     }
   });

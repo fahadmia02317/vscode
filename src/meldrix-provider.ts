@@ -43,6 +43,7 @@ export class MeldrixProvider {
    */
   async setApiKey(apiKey: string): Promise<void> {
     await this.ctx.secrets.store(MeldrixProvider.SECRET_KEY, apiKey);
+    this.isConnected = true;
   }
 
   /**
@@ -71,10 +72,8 @@ export class MeldrixProvider {
     try {
       const models = await this.fetchModelsInternal(apiKey);
       this.cachedModels = models;
-      this.isConnected = true;
       return true;
     } catch (error) {
-      this.isConnected = false;
       return false;
     }
   }
@@ -83,10 +82,21 @@ export class MeldrixProvider {
    * Fetch available models from the Meldrix backend.
    */
   async getModels(): Promise<MeldrixModel[]> {
-    if (!this.isConnected) {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) {
       throw new Error('Not connected to Meldrix. Please connect first.');
     }
-    return this.cachedModels;
+    
+    // Refresh models from backend
+    try {
+      const models = await this.fetchModelsInternal(apiKey);
+      this.cachedModels = models;
+      this.isConnected = true;
+      return models;
+    } catch (error) {
+      this.isConnected = false;
+      throw error;
+    }
   }
 
   /**

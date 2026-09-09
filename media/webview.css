@@ -143,6 +143,77 @@ html, body {
   font-weight: 600;
 }
 
+/* ---- Device authorization card -------------------------------------- */
+.device-card {
+  align-self: center;
+  width: 100%;
+  max-width: 280px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.device-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.device-code {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  padding: 8px 18px;
+  user-select: all;
+}
+
+.device-hint {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-line;
+  line-height: 1.6;
+}
+
+.device-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.device-actions button {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.device-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.device-pending {
+  color: var(--muted);
+  font-size: 11px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .composer {
   display: flex;
   align-items: flex-end;

@@ -11,6 +11,7 @@
   let streamingEl = null;
   let currentModels = [];
   let activeModel = null;
+  let deviceCardEl = null;
 
   function planLabel(p) {
     if (!p || !p.plan) return '–';
@@ -63,7 +64,6 @@
     modelSelect.innerHTML = '';
 
     if (!models || models.length === 0) {
-      models = [];
       modelSelect.style.display = 'none';
       activeModel = null;
       return;
@@ -101,6 +101,62 @@
     scrollBottom();
   }
 
+  // ---- Device code card (device authorization flow) -------------------
+  function showDeviceCode(userCode, verificationUri) {
+    removeDeviceCard();
+
+    deviceCardEl = document.createElement('div');
+    deviceCardEl.className = 'device-card';
+
+    const title = document.createElement('div');
+    title.className = 'device-title';
+    title.textContent = 'Sign in with Meldrix';
+    deviceCardEl.appendChild(title);
+
+    const code = document.createElement('div');
+    code.className = 'device-code';
+    code.textContent = userCode;
+    deviceCardEl.appendChild(code);
+
+    const hint = document.createElement('div');
+    hint.className = 'device-hint';
+    hint.textContent = `1. Browser opened at ${verificationUri}\n2. Sign in with your Gmail\n3. Enter the code above`;
+    deviceCardEl.appendChild(hint);
+
+    const actions = document.createElement('div');
+    actions.className = 'device-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy Code';
+    copyBtn.onclick = () => {
+      navigator.clipboard?.writeText(userCode);
+      vscode.postMessage({ type: 'copyCode', userCode });
+    };
+    actions.appendChild(copyBtn);
+
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open Browser';
+    openBtn.onclick = () => vscode.postMessage({ type: 'openBrowser' });
+    actions.appendChild(openBtn);
+
+    deviceCardEl.appendChild(actions);
+
+    const status = document.createElement('div');
+    status.className = 'device-pending';
+    status.textContent = 'Waiting for authorization…';
+    deviceCardEl.appendChild(status);
+
+    messages.appendChild(deviceCardEl);
+    scrollBottom();
+  }
+
+  function removeDeviceCard() {
+    if (deviceCardEl && deviceCardEl.parentNode) {
+      deviceCardEl.parentNode.removeChild(deviceCardEl);
+      deviceCardEl = null;
+    }
+  }
+
   function sendMessage() {
     const text = input.value.trim();
     if (!text) return;
@@ -125,9 +181,13 @@
     const msg = event.data;
     switch (msg.type) {
       case 'plan':
+        removeDeviceCard();
         planBadge.textContent = planLabel(msg.plan);
         planBadge.className = 'plan-badge ' + planClass(msg.plan);
         renderModels(msg.plan);
+        break;
+      case 'deviceCode':
+        showDeviceCode(msg.userCode, msg.verificationUri);
         break;
       case 'status':
         streamingEl = null;
@@ -144,9 +204,11 @@
         break;
       case 'error':
         streamingEl = null;
+        removeDeviceCard();
         addMessage('error', msg.text);
         break;
       case 'loggedOut':
+        removeDeviceCard();
         planBadge.textContent = 'not logged in';
         planBadge.className = 'plan-badge';
         break;
